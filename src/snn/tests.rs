@@ -1377,10 +1377,15 @@ impl SnnBackend for RecordingBackend {
         Ok(out)
     }
     fn step_frozen(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
-        self.inner.step_frozen(stimulus)
+        let out = self.inner.step_frozen(stimulus)?;
+        for &idx in &out.spikes {
+            self.counts[idx] += 1;
+        }
+        Ok(out)
     }
     fn reset(&mut self) {
         self.inner.reset();
+        self.counts.fill(0);
     }
     fn capabilities(&self) -> SnnCapabilities {
         self.inner.capabilities()
@@ -1536,6 +1541,36 @@ fn ann_snn_ann_round_trip_replays_bit_for_bit_under_fixed_seed() {
         counts.iter().sum::<usize>() > 0,
         "the SNN leg never spiked: {counts:?}"
     );
+
+    // Silent control: spikes produced is not spikes influential. A backend
+    // that never reports a spike must produce a different trajectory, or the
+    // decoded readout is not reaching `MoeOutput`.
+    let router = MoeRouter::load_with_mode("", 8, 2, crate::moe::RoutingMode::DenseSim).unwrap();
+    let mut silent = SpikingMoeRouter::new(
+        router,
+        ScriptedBackend {
+            channels: 8,
+            spikes: Vec::new(),
+        },
+        RateEncoder::default(),
+        SpikeCountDecoder,
+    )
+    .unwrap();
+    let embedding = embedding_with_gate_logits(&[2.0, -0.5, 0.25, 1.5, -1.0, 0.75, 0.0, -2.0]);
+    let differing_ticks = first
+        .iter()
+        .zip((0..30).map(|_| silent.forward(&embedding).unwrap()))
+        .filter(|(spiked, quiet)| {
+            spiked.selected_experts != quiet.selected_experts
+                || spiked.expert_weights != quiet.expert_weights
+                || spiked.hidden != quiet.hidden
+        })
+        .count();
+    assert!(
+        differing_ticks > 0,
+        "spikes never influenced the output; the decoded readout is not reaching MoeOutput"
+    );
+
     assert_eq!(first.len(), second.len());
     for (tick, (a, b)) in first.iter().zip(&second).enumerate() {
         assert_eq!(a.selected_experts, b.selected_experts, "tick {tick}");
