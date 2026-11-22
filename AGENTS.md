@@ -4,7 +4,7 @@ Guidance for coding agents (Amp, Codex, Cursor, Claude Code, and others) working
 
 ## Purpose
 
-`cortex-tensor` is a backend-neutral ANN stage layer (`AnnStage`, `AnnTopology`, `AnnExecutor`) plus a
+`cortex-hybrid` is a backend-neutral ANN stage layer (`AnnStage`, `AnnTopology`, `AnnExecutor`) plus a
 deterministic CPU `f32` reference backend: a contiguous row-major `Vec<f32>` tensor, a reference transformer,
 and dense MoE routing (see `README.md`). It has no CUDA, no Julia FFI and no mandatory framework dependency.
 Candle and Burn are optional adapters behind features. Checkpoint bytes come from `engram-parser` 0.3.0; this crate

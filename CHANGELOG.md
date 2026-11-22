@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Packaging
+
+- **Rename to `cortex-hybrid`** (RM-2479 / #172): the package and repo are renamed because the original crates.io name was already taken by another owner. The lib name stays `cortex_tensor`, so `use cortex_tensor::…` imports are unchanged; dependents write `cortex-hybrid = "…"`. Repository, homepage and docs.rs metadata point at `cortex-hybrid`.
+
 ### CI
 
-- **Feature matrix, MSRV job, semver-checks, workflow hygiene** (RM-2103): per-feature clippy and test runs (default, no-default, `neuromod`, `axon-encoder`, `candle`, `burn`); `rust-version` lowered from 1.99.0 to the verified floor 1.97.1 (set by `engram-parser` 0.3.0; `neuromod` needs 1.98.1, `axon-encoder` needs 1.99.0) with an `msrv` job guarding it, while the development toolchain stays pinned to 1.99.0; `cargo semver-checks` against the newest `v*` tag (skipped until a tag exists on an API matching `main` — do not tag the extraction commit as `v0.1.0` for changelog history alone); `pull-requests: write` moved to a separate reviewdog job; added `concurrency`, `timeout-minutes` and `rust-cache`; dependabot drops the dead `julia` entry and groups github-actions and cargo minor/patch updates.
+- **Feature matrix, MSRV job, semver-checks, workflow hygiene** (RM-2103): per-feature clippy and test runs (default, no-default, `neuromod`, `axon-encoder`, `candle`, `burn`); `rust-version` lowered from 1.99.0 to the verified floor 1.97.1 (set by `engram-parser` 0.3.0; `neuromod` needs 1.98.1, `axon-encoder` needs 1.99.0) with an `msrv` job guarding it, while the development toolchain stays pinned to 1.99.0; `cargo semver-checks` against the newest `v*` tag (skipped while no `v*` tag exists; the job takes whatever `v*` tag is newest and does not check that its API matches `main`, so do not tag the extraction commit as `v0.1.0` for changelog history alone); `pull-requests: write` moved to a separate reviewdog job; added `concurrency`, `timeout-minutes` and `rust-cache`; dependabot drops the dead `julia` entry and groups github-actions and cargo minor/patch updates.
 
 ### Refactored
 
@@ -28,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Criterion benches for the reference backend (`benches/reference_backend.rs`, RM-1491 / #151).
 - Golden tests that freeze the deterministic CPU reference backend (`tests/reference_goldens.rs`, comparator in `tests/support/golden.rs`) and `tests/fixtures/REFERENCE_GOLDENS.md`, which records the inputs, tolerances and comparison rules adapters can reuse. Tests only; no behavior change (RM-1826, #73).
 - Fallible `try_*` counterparts across the reference transformer and attention stack (`MultiHeadAttention`, `FeedForward`, `TransformerBlock`, `TransformerLM`), returning `CortexError` for shape, index and rank failures instead of panicking. The panic-style methods remain as compatibility wrappers; prefer `try_*` in new code (RM-1489, #60).
 - Optional `candle` cargo feature adding `adapter::CandleExecutor`, a CPU `f32` `AnnExecutor` (backend `"candle"`, stateless) for embedding, causal attention, layer/RMS norm, dense GELU MLP, gated SwiGLU MLP, add, and readout. Stage bodies call Candle's `Embedding`, `Linear`, `LayerNorm`, `RmsNorm`, GELU, `swiglu`, and CPU flash-attention rather than reimplementing those kernels. Row-major `f32` hidden state crosses the backend only through `import_hidden_state` / `export_hidden_state` (and reference-tensor wrappers); weights are transposed into Candle layout once at bind time. MoE and custom stages return `UnsupportedStage`. CUDA, MKL, and Metal stay disabled (RM-1828).
@@ -57,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `MappedCheckpoint::extract_token_embedding` (and `MoeRouter::extract_token_embedding*`) return `TokenIndex { index, vocab_size }` for an out-of-vocabulary id (was `InputLengthMismatch`).
   - engram-parser `LimitExceeded`, `HostSizeOverflow`, `DuplicateTensorOwnership` and `MissingShard` surface as `ModelLoad { path, reason }` (were `UnsupportedFormat(String)` without the path).
   - A checkpoint with `embedding_length == 0` is rejected by adapter resolution with `UnsupportedFormat`, like `expert_count == 0`.
+- **Breaking (error variants, `candle` feature, RM-2363 / #148):** `CandleExecutor` failures that have a typed `CortexError` variant no longer surface as `Msg` or `InvalidConfig`. Callers matching the old variants must update:
+  - Tensor-input stages (attention, layer/RMS norm, dense/gated MLP, readout) reject rank 0, 1, and 4+ inputs with `StageFailed { RankMismatch { expected: 2, got } }` before Candle runs, the same error `ReferenceExecutor` returns. Previously attention returned a hand-built `Msg`, readout/MLP surfaced Candle's matmul error as `Msg`, rank 0 was `RankMismatch { expected: 1 }`, and layer/RMS norm accepted rank 1. Rank 3 `[batch, seq, dim]` stays a Candle-only extension, and an empty batch (`[0, seq, dim]`) now returns an empty output on every stage instead of an opaque `Msg`.
+  - `Add` with mismatched operand shapes returns `StageFailed { ShapeMismatch { expected, got } }` (was Candle's `Msg`), matching `ReferenceExecutor`.
+  - A non-`f32` Candle tensor returns `StageDTypeMismatch` and a non-CPU one returns `UnsupportedOperation { category: "device" }` (both were `InvalidConfig`), from `export_hidden_state` and stage outputs. The stage id is `hidden_state` at the import/export boundary.
+  - Remaining Candle-internal errors are still `Msg`, now prefixed with `candle: `.
+  - Empty non-square projections validate output strides before allocating: a representable empty input whose output width overflows Candle's stride arithmetic returns `StageFailed { SizeOverflow }` instead of panicking.
+  - Hidden-state import uses one crate-private `checked_numel` (zero-axis short-circuit, `SizeOverflow` on overflow) on both paths; the adapter-local copy is gone. `ReferenceExecutor::import_hidden` overflow is now `StageFailed { SizeOverflow }` (was `StageFailed { ShapeMismatch { got: [dim] } }`). `import_hidden_state` also returns `SizeOverflow` for zero-sized shapes whose non-zero extents overflow (for example `[usize::MAX, usize::MAX, 0]` or `[0, usize::MAX, 2]`): candle-core 0.11 multiplies every extent without a zero short-circuit and panics on the overflow (`[0, usize::MAX, 2]` previously reached that panic), so the Candle path keeps rejecting them while the reference path accepts `[usize::MAX, usize::MAX, 0]`.
 - **Breaking (error variants, RM-2097 / #109):** `Tensor::try_softmax_last` and `ops::try_softmax` return `RankMismatch { expected: 2, got }` for rank `> 2` (was `InvalidConfig("softmax_last: max 2-D, …")`), matching every other rank-checked op. The panicking `softmax_last` / `ops::softmax` wrappers now go through the shared compatibility panic, so the message names the API (`Tensor::softmax_last` / `softmax`) and points at the `try_*` replacement.
 - `MoeRouter::forward`, `extract_token_embedding` and `extract_token_embedding_with_options` take `&self` instead of `&mut self`. None of them mutated the router, so existing callers keep compiling and a loaded router can now be shared by reference (RM-2098).
 - `MultiHeadAttention::try_forward` scales and causal-softmaxes the scores in place on the `try_batched_matmul` output (one `[nh, seq, seq]` buffer instead of four, with an O(seq) scratch row), and every linear layer in attention and `FeedForward` adds its bias in place via a shared crate-private `add_row_bias` instead of tiling it into a `[seq, dim]` tensor plus a `try_add` copy. Each element sees the same operations in the same order, so outputs are bit-identical; no public API changes. This also removes the `scale`/softmax copies that could still abort on allocation failure (#103, RM-2091).
@@ -67,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MappedCheckpoint` is a temporary router binding shim. Remove it when callers take `engram_parser::Checkpoint` directly. Malformed input returns the engram-parser error; there is no in-tree parser fallback.
 - A loaded router decodes the F32 gate once and keeps the token-embedding payload, then releases the rest of the checkpoint. `mmap` stays off. A stored `expert_count` of 0 is rejected. Token lookup continues past an unsupported `token_embd.weight` and also accepts `embed_tokens.weight` names. Gate suffix search orders `layers.N`, `layer.N`, and `block(s).N` numerically, same as `blk.N` (RM-1265).
 - Packaging: `Cargo.toml` adds `documentation`, `keywords`, `categories`, and `publish = false` until a release is intended. An `include` allow list (`src/**`, `LICENSE-*`, `README.md`, `CHANGELOG.md`) replaces the `exclude` list, so the package no longer ships `tests/` or its fixtures. `[profile.release]` (`opt-level = 3`, `lto = "fat"`) is removed: Cargo ignores it for dependents, there are no benches, and the release-mode golden run must not depend on LTO (#116).
+- SNN dependencies are locked to the published crates.io releases: `neuromod = "0.7.0"` and `axon-encoder = "0.6.0"` behind their optional features. No path or git dependencies exist for either crate; `synaptic-wiring`, `nir-rs` and `plasticity-lab` were evaluated for the same lock and nothing in-tree stubs or duplicates them — connectivity/topology, the NIR interchange format, and training/session orchestration stay outside this crate's boundary (RM-2206 / #137).
 - Crate identity is a backend-neutral ANN stage layer plus a deterministic `Vec<f32>` reference backend. README and Cargo description say so. Checkpoint parsing stays in engram-parser, orchestration stays in hybrid-fusion, and the closed decision not to merge hybrid-fusion (issue 35) stands. No new framework-generic numerical API (issue 56).
 - Parser-boundary docs point at the engram-parser 0.3.0 consume in this unreleased section (RM-1265). The older plan to wrap `parse_checkpoint_layout` around engram-parser 0.2.0 stays superseded.
 - **Breaking:** `RoutingMode` serde now emits the canonical snake_case slug wire form (`stub_uniform`, `dense_sim`) instead of PascalCase. Legacy PascalCase payloads still deserialize through explicit aliases (RM-1518).
@@ -82,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Breaking (new `CortexError` variant, RM-1418 / #170):** `snn::SpikingMoeRouter` checks the encoder's stimulus length against the backend channel count and returns the new `CortexError::SnnStimulusLength { expected, got }` before `SnnBackend::step` ticks, instead of handing a wrong-length stimulus to the backend. The same audit fixes `resample_embedding`, which computed source indices in `f32`. Past 2^24 elements it could index one past the end and panic, or drop the last value. Indices are now clamped in integer space. `synthetic_gate_scores` returns zero scores for an empty embedding instead of panicking.
 - `MultiHeadAttention::param_count`, `FeedForward::param_count`, `TransformerBlock::param_count` and `TransformerLM::param_count` sum tensor `numel()` with saturating adds, so no combination of `pub` fields can panic (debug) or wrap (release).
 - `MoeRouter::load_with_mode` rejects `num_experts > expert_count` before decoding the gate and copying the token-embedding payload.
 - `NeuromodNetwork` no longer flattens every `neuromod::StepError` to `SnnBackend(String)`: `InputLenMismatch` maps to `InputLengthMismatch` and `NonFiniteStimulus` to the new `CortexError::SnnInvalidStimulus { channel, value }`; other errors stay `SnnBackend`. **Breaking (policy):** `SpikingMoeRouter::forward` / `forward_frozen` now reject a ±Inf gate score, or a ±Inf encoded stimulus sample, with `SnnInvalidStimulus` before the encoder or backend runs (NaN keeps `NanRoutingScore` / `SnnNan`). Previously ±Inf passed the router and neuromod rejected it after the encoder state had advanced; plain `MoeRouter` still ranks ±Inf (RM-2364, #149).
@@ -124,6 +138,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional Sentry integration (feature, dependency, and re-export). Wire monitoring at the application layer.
 - Qodana Cloud scan (`qodana-rust` + `QODANA_TOKEN_128211718`) after membership expiry. Deleted `qodana.yaml` and `.github/workflows/qodana_code_quality.yml`.
 
+### Tests
+
+- **SNN hardening under fixed seeds** (RM-2206 / #137): the neuromod adapter tests that drive channels now run on `with_seed` instead of the thread-local RNG — per-channel spike counts (`neuromod_adapter_new_wires_every_channel_to_a_spiking_neuron`, `neuromod_adapter_drives_spiking_router_on_every_expert`, the sparse-weight case in `neuromod_adapter_rejects_blank_lif_neurons`). New tests: a zero-initialised `with_dimensions` control proving the raw base network can never spike so the every-channel assertions are not vacuous; the Izhikevich bank firing under saturating dopamine drive (observable through `last_spike_time` and the recovery variable); and a fixed-seed ANN → SNN → ANN round-trip through `SpikingMoeRouter` that replays the whole `MoeOutput` trajectory bit-for-bit while asserting the SNN leg actually spiked.
+
 ### Docs
 
 - **SNN step-contract mapping with hybrid-fusion** (RM-2360): new
@@ -152,5 +170,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial release of cortex-tensor as standalone crate (extracted from corinth-canal).
+- Initial release of cortex-hybrid as standalone crate (extracted from corinth-canal).
 - Tensor, ops, transformer, and MoE (GGUF) modules.

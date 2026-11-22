@@ -144,6 +144,81 @@ fn overflowing_encoder_stimulus_is_rejected_before_backend_step() {
     assert_eq!(model.backend().steps, 0);
 }
 
+/// A finite gate can still overflow to ±Inf in the encoder (`gain` scaling),
+/// and that is a separate rejection from the infinite *gate* case above: the
+/// gate scores stay finite, the encoder output does not.
+#[test]
+fn infinite_encoder_stimulus_is_rejected_before_backend_step() {
+    for bad in [f32::INFINITY, f32::NEG_INFINITY] {
+        let router =
+            MoeRouter::load_with_mode("", 8, 2, crate::moe::RoutingMode::DenseSim).unwrap();
+        let mut model = SpikingMoeRouter::new(
+            router,
+            MockBackend::new(8, 0.0),
+            RateEncoder { gain: bad },
+            SpikeCountDecoder,
+        )
+        .unwrap();
+        // The gate scores are finite here (a sum of 1.0s), so only the
+        // encoder output is infinite.
+        let err = model.forward(&[1.0; EMBEDDING_DIM]).unwrap_err();
+        assert!(
+            matches!(err, HybridError::SnnInvalidStimulus { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(model.backend().steps, 0);
+    }
+}
+
+/// Encoder that ignores the requested width and returns `len` zeros.
+struct FixedLengthEncoder(usize);
+
+impl SnnEncoder for FixedLengthEncoder {
+    fn encode(&mut self, _ann_signal: &[f32], _channels: usize) -> Result<Vec<f32>> {
+        Ok(vec![0.0; self.0])
+    }
+}
+
+/// A stimulus of the wrong width breaks the `SnnEncoder` contract. It is
+/// rejected with its own variant before the backend ticks, instead of being
+/// handed to a backend that may index it by channel.
+#[test]
+fn wrong_length_encoder_stimulus_is_rejected_before_backend_step() {
+    let embedding = vec![0.0f32; EMBEDDING_DIM];
+    for got in [0usize, 7, 9] {
+        let router =
+            MoeRouter::load_with_mode("", 8, 2, crate::moe::RoutingMode::DenseSim).unwrap();
+        let mut model = SpikingMoeRouter::new(
+            router,
+            MockBackend::new(8, 0.0),
+            FixedLengthEncoder(got),
+            SpikeCountDecoder,
+        )
+        .unwrap();
+        for frozen in [false, true] {
+            let err = if frozen {
+                model.forward_frozen(&embedding).unwrap_err()
+            } else {
+                model.forward(&embedding).unwrap_err()
+            };
+            assert!(
+                matches!(err, CortexError::SnnStimulusLength { expected: 8, got: g } if g == got),
+                "got {err:?}"
+            );
+        }
+        assert_eq!(model.backend().steps, 0);
+        assert_eq!(model.backend().frozen_steps, 0);
+    }
+    assert_eq!(
+        CortexError::SnnStimulusLength {
+            expected: 8,
+            got: 7
+        }
+        .to_string(),
+        "SNN encoder returned 7 stimulus values for 8 channels"
+    );
+}
+
 /// Issue #89: `SpikingMoeRouter` shares `MoeRouter::gate_scores`, so a
 /// checkpoint gate written in GGUF `ne` order must route the same way through
 /// the spiking path. Expert 5's row is all ones; input `e_0` selects expert 5.
@@ -979,7 +1054,9 @@ fn neuromod_adapter_new_wires_every_channel_to_a_spiking_neuron() {
     // `SpikingNetwork::with_dimensions` zero-initialises LIF weights and the
     // L1 renormalization keeps a blank neuron blank, so a backend built that
     // way never spikes (#91). `new` must seed weights so every channel can.
-    let mut net = NeuromodNetwork::new(8, 0, 8).unwrap();
+    let mut net = NeuromodNetwork::new(8, 0, 8)
+        .unwrap()
+        .with_seed(0x5EED_0001);
     let counts = neuromod_spike_counts(&mut net, &[1.0; 8], 200);
     assert!(
         counts.iter().all(|&c| c > 0),
@@ -989,7 +1066,9 @@ fn neuromod_adapter_new_wires_every_channel_to_a_spiking_neuron() {
     // Identity wiring: driving channel `i` alone spikes neuron `i` alone, so
     // `SpikingMoeRouter`'s expert-to-channel mapping holds.
     for ch in 0..8 {
-        let mut net = NeuromodNetwork::new(8, 0, 8).unwrap();
+        let mut net = NeuromodNetwork::new(8, 0, 8)
+            .unwrap()
+            .with_seed(0x5EED_0002);
         let mut stimulus = [0.0; 8];
         stimulus[ch] = 1.0;
         let counts = neuromod_spike_counts(&mut net, &stimulus, 50);
@@ -1068,7 +1147,9 @@ fn neuromod_adapter_rejects_blank_lif_neurons() {
         neuron.weights[i] = 1.0;
     }
     short.neurons[3].weights.truncate(4);
-    let mut short = NeuromodNetwork::from_network(short).expect("sparse but drivable");
+    let mut short = NeuromodNetwork::from_network(short)
+        .expect("sparse but drivable")
+        .with_seed(0x5EED_0003);
     let mut one_hot = [0.0; 8];
     one_hot[3] = 1.0;
     assert!(neuromod_spike_counts(&mut short, &one_hot, 50)[3] > 0);
@@ -1274,6 +1355,43 @@ fn neuromod_adapter_seeded_rng_replays_bit_for_bit() {
     );
 }
 
+/// Backend wrapper that counts spikes per channel while delegating to a real
+/// backend, so tests can observe the spikes the router's own `forward` /
+/// `forward_frozen` path draws instead of inferring them from `hidden`.
+#[cfg(feature = "neuromod")]
+struct RecordingBackend {
+    inner: NeuromodNetwork,
+    counts: Vec<usize>,
+}
+
+#[cfg(feature = "neuromod")]
+impl SnnBackend for RecordingBackend {
+    fn channels(&self) -> usize {
+        self.inner.channels()
+    }
+    fn step(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
+        let out = self.inner.step(stimulus)?;
+        for &idx in &out.spikes {
+            self.counts[idx] += 1;
+        }
+        Ok(out)
+    }
+    fn step_frozen(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
+        let out = self.inner.step_frozen(stimulus)?;
+        for &idx in &out.spikes {
+            self.counts[idx] += 1;
+        }
+        Ok(out)
+    }
+    fn reset(&mut self) {
+        self.inner.reset();
+        self.counts.fill(0);
+    }
+    fn capabilities(&self) -> SnnCapabilities {
+        self.inner.capabilities()
+    }
+}
+
 #[cfg(feature = "neuromod")]
 #[test]
 fn neuromod_adapter_drives_spiking_router_on_every_expert() {
@@ -1283,35 +1401,11 @@ fn neuromod_adapter_drives_spiking_router_on_every_expert() {
     // dense selected mass, so `hidden` can no longer tell "every channel
     // fired" from "nothing fired". Record the spikes the router's own
     // `forward` path draws from the backend instead.
-    struct Recording {
-        inner: NeuromodNetwork,
-        counts: Vec<usize>,
-    }
-    impl SnnBackend for Recording {
-        fn channels(&self) -> usize {
-            self.inner.channels()
-        }
-        fn step(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
-            let out = self.inner.step(stimulus)?;
-            for &idx in &out.spikes {
-                self.counts[idx] += 1;
-            }
-            Ok(out)
-        }
-        fn step_frozen(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
-            self.inner.step_frozen(stimulus)
-        }
-        fn reset(&mut self) {
-            self.inner.reset();
-        }
-        fn capabilities(&self) -> SnnCapabilities {
-            self.inner.capabilities()
-        }
-    }
-
     let router = MoeRouter::load_with_mode("", 8, 8, crate::moe::RoutingMode::DenseSim).unwrap();
-    let backend = Recording {
-        inner: NeuromodNetwork::new(8, 0, 8).unwrap(),
+    let backend = RecordingBackend {
+        inner: NeuromodNetwork::new(8, 0, 8)
+            .unwrap()
+            .with_seed(0x5EED_0004),
         counts: vec![0; 8],
     };
     let mut model =
@@ -1348,4 +1442,144 @@ fn neuromod_router_rejects_overflowing_gate_pre_tick_with_typed_error() {
         "got {err:?}"
     );
     assert_eq!(model.backend().network().global_step, 0);
+}
+
+/// Control for the per-channel tests: a raw `SpikingNetwork::with_dimensions`
+/// keeps every LIF weight at 0.0, integrates `|stimulus| * weight`, and its
+/// L1 renormalization skips blank neurons — so under strong stimulus it can
+/// never spike. Without this the "every channel fires" assertions above would
+/// prove nothing about `new`'s identity wiring (#91).
+#[cfg(feature = "neuromod")]
+#[test]
+fn neuromod_zero_init_base_network_stays_silent_under_strong_stimulus() {
+    let mut raw = neuromod::SpikingNetwork::with_dimensions(8, 0, 8);
+    for _ in 0..200 {
+        let out = raw
+            .step(&[1.0; 8], &neuromod::NeuroModulators::default())
+            .unwrap();
+        assert!(
+            out.is_empty(),
+            "zero-initialised weights must never spike, got {out:?}"
+        );
+    }
+
+    // Same shape through the adapter's seeded identity wiring: every channel
+    // fires under a fixed seed.
+    let mut net = NeuromodNetwork::new(8, 0, 8)
+        .unwrap()
+        .with_seed(0x5EED_0005);
+    let counts = neuromod_spike_counts(&mut net, &[1.0; 8], 200);
+    assert!(
+        counts.iter().all(|&c| c > 0),
+        "wired channels must all spike: {counts:?}"
+    );
+}
+
+/// The Izhikevich bank is auxiliary — its units are driven from mean LIF
+/// membrane potential plus dopamine and do not report through `step`'s spike
+/// list — but the drive must actually reach them. Under saturating dopamine
+/// (`iz_drive` clamps at 15) every regular-spiking unit fires; a fired unit
+/// is observable through `last_spike_time` leaving its -1 sentinel and its
+/// recovery variable moving off `b * c`.
+#[cfg(feature = "neuromod")]
+#[test]
+fn neuromod_adapter_izhikevich_bank_spikes_under_modulator_drive() {
+    let mut net = NeuromodNetwork::new(8, 3, 8)
+        .unwrap()
+        .with_seed(0x5EED_0006);
+    net.modulators.dopamine = 3.0;
+    for _ in 0..200 {
+        net.step(&[1.0; 8]).unwrap();
+    }
+    for (idx, iz) in net.network().iz_neurons.iter().enumerate() {
+        assert!(
+            iz.last_spike_time >= 0,
+            "Izhikevich neuron {idx} never fired under saturating drive"
+        );
+        assert_ne!(
+            iz.u,
+            iz.b * iz.c,
+            "Izhikevich neuron {idx} still sits at resting recovery"
+        );
+    }
+}
+
+/// Fixed-seed ANN → SNN → ANN smoke test: a fixed embedding produces gate
+/// scores (ANN), the encoder maps them to stimuli, the seeded neuromod
+/// backend spikes (SNN), and the decoded readout feeds the boosted softmax
+/// and scaled hidden state (ANN). Two identically seeded models must replay
+/// the whole output trajectory bit-for-bit, and the SNN leg must actually
+/// have spiked.
+#[cfg(feature = "neuromod")]
+#[test]
+fn ann_snn_ann_round_trip_replays_bit_for_bit_under_fixed_seed() {
+    fn run() -> (Vec<crate::moe::MoeOutput>, Vec<usize>) {
+        let router =
+            MoeRouter::load_with_mode("", 8, 2, crate::moe::RoutingMode::DenseSim).unwrap();
+        let backend = RecordingBackend {
+            inner: NeuromodNetwork::new(8, 0, 8)
+                .unwrap()
+                .with_seed(0xA55E_ED01),
+            counts: vec![0; 8],
+        };
+        let mut model =
+            SpikingMoeRouter::new(router, backend, RateEncoder::default(), SpikeCountDecoder)
+                .unwrap();
+        // Mixed-sign logits so spiking experts can visibly reorder the top-2.
+        let embedding = embedding_with_gate_logits(&[2.0, -0.5, 0.25, 1.5, -1.0, 0.75, 0.0, -2.0]);
+        let mut outputs = Vec::new();
+        for _ in 0..30 {
+            outputs.push(model.forward(&embedding).unwrap());
+        }
+        (outputs, model.backend().counts.clone())
+    }
+
+    let (first, counts) = run();
+    let (second, replay_counts) = run();
+    assert_eq!(counts, replay_counts);
+    assert!(
+        counts.iter().sum::<usize>() > 0,
+        "the SNN leg never spiked: {counts:?}"
+    );
+
+    // Silent control: spikes produced is not spikes influential. A backend
+    // that never reports a spike must produce a different trajectory, or the
+    // decoded readout is not reaching `MoeOutput`.
+    let router = MoeRouter::load_with_mode("", 8, 2, crate::moe::RoutingMode::DenseSim).unwrap();
+    let mut silent = SpikingMoeRouter::new(
+        router,
+        ScriptedBackend {
+            channels: 8,
+            spikes: Vec::new(),
+        },
+        RateEncoder::default(),
+        SpikeCountDecoder,
+    )
+    .unwrap();
+    let embedding = embedding_with_gate_logits(&[2.0, -0.5, 0.25, 1.5, -1.0, 0.75, 0.0, -2.0]);
+    let differing_ticks = first
+        .iter()
+        .zip((0..30).map(|_| silent.forward(&embedding).unwrap()))
+        .filter(|(spiked, quiet)| {
+            spiked.selected_experts != quiet.selected_experts
+                || spiked.expert_weights != quiet.expert_weights
+                || spiked.hidden != quiet.hidden
+        })
+        .count();
+    assert!(
+        differing_ticks > 0,
+        "spikes never influenced the output; the decoded readout is not reaching MoeOutput"
+    );
+
+    assert_eq!(first.len(), second.len());
+    for (tick, (a, b)) in first.iter().zip(&second).enumerate() {
+        assert_eq!(a.selected_experts, b.selected_experts, "tick {tick}");
+        assert_eq!(a.expert_weights, b.expert_weights, "tick {tick}");
+        assert_eq!(a.hidden, b.hidden, "tick {tick}");
+        assert_eq!(a.hidden.len(), EMBEDDING_DIM, "tick {tick}");
+        assert!(
+            a.hidden.iter().all(|v| v.is_finite()),
+            "tick {tick}: non-finite hidden egress"
+        );
+    }
 }
