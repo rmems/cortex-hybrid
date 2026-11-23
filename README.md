@@ -38,25 +38,36 @@ Design boundaries:
 
 ```
 src/
-├── lib.rs            # re-exports Tensor, CortexError, HybridError, Result
-├── error.rs          # CortexError + HybridError alias
-├── types.rs          # EMBEDDING_DIM, ExtractTokenOptions, RoutingMode
+├── lib.rs               # re-exports Tensor, CortexError, HybridError, Result, stage entry points
+├── error.rs             # CortexError + HybridError alias
+├── types.rs             # EMBEDDING_DIM, ExtractTokenOptions, RoutingMode
+├── stage.rs             # AnnStage / AnnTopology / AnnExecutor, run_topology, ReferenceExecutor
+├── adapter.rs           # ExternalAdapter capability contract
+├── adapter/
+│   ├── candle.rs        # CandleExecutor (feature `candle`)
+│   └── burn_adapter.rs  # policy stub (feature `burn`)
+├── reference_json.rs    # size-limited loading + object-shape check for reference JSON
 ├── tensor/
-│   ├── finite.rs     # finite-value policy + stable softmax / LayerNorm / RMSNorm / L2 kernels
-│   ├── mod.rs        # row-major Tensor { data, shape } (strides recomputed from shape)
-│   └── ops.rs        # matmul, batched_matmul, causal_mask, softmax, layer_norm, rms_norm
+│   ├── finite.rs        # finite-value policy + stable softmax / LayerNorm / RMSNorm / L2 kernels
+│   ├── mod.rs           # row-major Tensor { data, shape } (strides recomputed from shape)
+│   └── ops.rs           # matmul, batched_matmul, causal_mask, softmax, layer_norm, rms_norm
 ├── transformer/
-│   ├── attention.rs  # MultiHeadAttention (scaled dot-product, causal prefix softmax)
-│   ├── block.rs      # TransformerBlock (attn + MLP + LayerNorm)
-│   ├── model.rs      # TransformerConfig + TransformerLM (decoder-only)
+│   ├── attention.rs     # MultiHeadAttention (scaled dot-product, causal prefix softmax)
+│   ├── block.rs         # TransformerBlock (attn + MLP + LayerNorm)
+│   ├── model.rs         # TransformerConfig + TransformerLM (decoder-only)
 │   └── mod.rs
-└── moe/
-    ├── mod.rs        # MoeRouter public API, RoutingMode
-    ├── adapter.rs    # checkpoint adapter resolution + tensor selection
-    ├── checkpoint.rs # normalized checkpoint binding (engram-parser shim)
-    ├── routing.rs    # softmax, top-k, L2 normalize, embedding resample
-    ├── test_fixtures.rs
-    └── tests.rs      # router + checkpoint unit tests
+├── moe/
+│   ├── mod.rs           # MoeRouter public API (re-exports RoutingMode from types.rs)
+│   ├── adapter.rs       # checkpoint adapter resolution + tensor selection
+│   ├── checkpoint.rs    # normalized checkpoint binding (engram-parser shim)
+│   ├── routing.rs       # softmax, top-k, L2 normalize, embedding resample
+│   ├── test_fixtures.rs
+│   └── tests.rs         # router + checkpoint unit tests
+└── snn/
+    ├── mod.rs           # SnnBackend / SnnEncoder / SnnDecoder contract, SpikingMoeRouter
+    ├── neuromod_adapter.rs  # NeuromodNetwork (feature `neuromod`)
+    ├── axon_adapter.rs      # AxonEncoder (feature `axon-encoder`)
+    └── tests.rs
 ```
 
 ## Modules
@@ -122,7 +133,7 @@ by cross-crate parity tests in hybrid-fusion's `smoke/cortex-neuromod` package
 | `SnnStepOutput` / `SnnCapabilities` | Per-tick spike output and backend capability reporting for orchestrators (e.g. `hybrid-fusion`). |
 | `SpikingMoeRouter` | Composes `MoeRouter` gate scores with an `SnnBackend`: encode → step → decode → deterministic top-k. Replaces the removed embedded `RoutingMode::SpikingSim`. |
 | `NeuromodNetwork` | `neuromod`-feature adapter over `neuromod::SpikingNetwork` (LIF + Izhikevich, R-STDP). One LIF neuron per channel; `new` seeds identity wiring so every channel can spike. Frozen eval uses neuromod 0.7's `step_frozen`; `with_seed` routes stepping through `step_with_rng` / `step_frozen_with_rng` for deterministic replay (`capabilities().caller_rng` is `true` only then). |
-| `AxonEncoder` | `axon-encoder`-feature adapter over any `axon_encoder::Encoder` (rate, latency, delta, predictive, population). Spikes net to `+1.0`/`-1.0` per channel per tick. |
+| `AxonEncoder` | `axon-encoder`-feature adapter over any `axon_encoder::Encoder` (rate, latency, delta, predictive, population). Each spike contributes `+1.0`/`-1.0` to its channel per tick; repeated spikes accumulate. |
 
 ```toml
 [dependencies]
@@ -415,7 +426,7 @@ Linked work, not implemented by the boundary-reset docs:
 
 - Issue 57 — `AnnStage` / `AnnExecutor` (closed; on `main`).
 - Issue 58 — external Rust ML adapter and capability contracts (open). The Candle executor landed under RM-1828; Burn and the core negotiation contract are still open.
-- Issue 47 — consume published engram-parser 0.3.0 and retire in-tree GGUF (this tree).
+- Issue 47 — consume published engram-parser 0.3.0 and retire in-tree GGUF (done; engram-parser 0.3.0 has been on crates.io since 2026-10-05).
 - Issue 35 — do not merge hybrid-fusion (closed; still in force).
 
 ## License
