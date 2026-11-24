@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release tag to sync (for example, v0.2.0)'
+        description: 'Existing release tag to dry-run sync (for example, v0.2.0)'
         required: true
         type: string
       base_ref:
@@ -31,11 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Resolve release version
         id: version
         shell: bash
@@ -66,9 +61,17 @@ jobs:
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
-      # First release: with no previous v* tag an empty base_ref scans all history.
-      # Runs on push and release events so the release-published sync uses the
-      # real previous tag instead of rescanning from the repository root.
+      # Dispatch dry runs must scan the requested tag, not the ref the
+      # workflow was dispatched from; push/release check out the event sha.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && steps.version.outputs.tag || github.sha }}
+
+      # Previous release tag becomes the exclusive scan base. With no earlier
+      # v* tag the root commit is the base so the first release still scans
+      # the whole history (<base>..HEAD excludes only the root commit itself).
       - name: Find previous release tag
         id: release_base
         if: github.event_name != 'workflow_dispatch'
@@ -77,13 +80,14 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           while IFS= read -r tag; do
-            [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] || continue
             [[ "${tag}" != "${TAG}" ]] || continue
             echo "base_ref=${tag}" >> "${GITHUB_OUTPUT}"
             exit 0
           done < <(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname)
-          echo "::notice title=linear-release::No previous v* tag; syncing from the root."
-          echo "base_ref=" >> "${GITHUB_OUTPUT}"
+          base=$(git rev-list --max-parents=0 HEAD | head -n1)
+          echo "::notice title=linear-release::No previous v* tag; syncing from root commit ${base}."
+          echo "base_ref=${base}" >> "${GITHUB_OUTPUT}"
 
       - name: Sync release commits and issues to Linear
         uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0
@@ -92,6 +96,7 @@ jobs:
           command: sync
           version: ${{ steps.version.outputs.tag }}
           base_ref: ${{ steps.release_base.outputs.base_ref || inputs.base_ref || '' }}
+          issue_pattern: '(RM-\d+)'
           dry_run: ${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Complete release in Linear
