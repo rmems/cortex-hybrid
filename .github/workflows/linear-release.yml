@@ -67,9 +67,11 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       # First release: with no previous v* tag an empty base_ref scans all history.
+      # Runs on push and release events so the release-published sync uses the
+      # real previous tag instead of rescanning from the repository root.
       - name: Find previous release tag
         id: release_base
-        if: github.event_name == 'push'
+        if: github.event_name != 'workflow_dispatch'
         shell: bash
         env:
           TAG: ${{ steps.version.outputs.tag }}
