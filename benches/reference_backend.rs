@@ -7,9 +7,9 @@
 
 use std::hint::black_box;
 
-use cortex_tensor::Tensor;
-use cortex_tensor::tensor::ops::matmul;
-use cortex_tensor::transformer::{TransformerConfig, TransformerLM};
+use cortex_hybrid::Tensor;
+use cortex_hybrid::tensor::ops::matmul;
+use cortex_hybrid::transformer::{TransformerConfig, TransformerLM};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
 const SEED: u64 = 0x5EED;

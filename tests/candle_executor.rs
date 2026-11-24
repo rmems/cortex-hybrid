@@ -6,17 +6,17 @@
 
 use std::collections::BTreeSet;
 
-use cortex_tensor::adapter::{
+use cortex_hybrid::adapter::{
     AttentionWeights, CandleExecutor, EmbeddingWeights, GatedMlpWeights, HiddenState,
     LayerNormWeights, LinearWeights, MlpWeights, RmsNormWeights, export_hidden_state,
     export_reference, import_hidden_state, import_reference,
 };
-use cortex_tensor::stage::{
+use cortex_hybrid::stage::{
     AnnExecutor, AnnStage, AnnTopology, DType, ExternalBindings, MlpKind, NormKind, StageId,
     StageInput, StageKind, StageSource, StageTensor, run_topology,
 };
-use cortex_tensor::tensor::ops::{try_embedding, try_layer_norm, try_matmul, try_rms_norm};
-use cortex_tensor::{CortexError, Tensor};
+use cortex_hybrid::tensor::ops::{try_embedding, try_layer_norm, try_matmul, try_rms_norm};
+use cortex_hybrid::{CortexError, Tensor};
 
 fn stage_id(name: &str) -> StageId {
     StageId::new(name).expect("valid stage id")
@@ -591,7 +591,7 @@ fn attention_matches_reference_within_tolerance() {
     let wv = proj(0.3);
     let wo = proj(0.4);
     let zeros = Tensor::try_zeros(&[1, dim]).unwrap();
-    let attn = cortex_tensor::transformer::MultiHeadAttention {
+    let attn = cortex_hybrid::transformer::MultiHeadAttention {
         num_heads: heads,
         head_dim: dim / heads,
         dim,
@@ -981,7 +981,7 @@ fn tensor_stage_executor() -> (CandleExecutor, Vec<AnnStage>) {
     (exec, stages)
 }
 
-fn hidden(shape: &[usize]) -> cortex_tensor::adapter::CandleTensor {
+fn hidden(shape: &[usize]) -> cortex_hybrid::adapter::CandleTensor {
     let numel = shape.iter().product();
     import_hidden_state(&HiddenState {
         data: (0..numel).map(|i| i as f32 * 0.25 - 0.5).collect(),
@@ -1178,10 +1178,10 @@ fn add_shape_mismatch_is_typed() {
 /// is compared here.
 #[test]
 fn reference_and_candle_reject_bad_shapes_with_same_variant() {
-    use cortex_tensor::ReferenceExecutor;
-    use cortex_tensor::stage::ReferenceStageParams;
-    use cortex_tensor::transformer::MultiHeadAttention;
-    use cortex_tensor::transformer::block::FeedForward;
+    use cortex_hybrid::ReferenceExecutor;
+    use cortex_hybrid::stage::ReferenceStageParams;
+    use cortex_hybrid::transformer::MultiHeadAttention;
+    use cortex_hybrid::transformer::block::FeedForward;
     use std::mem::discriminant;
 
     let attn = MultiHeadAttention::try_new_seeded(DIM, 1, 7).unwrap();
@@ -1279,8 +1279,8 @@ fn reference_and_candle_reject_bad_shapes_with_same_variant() {
 /// to reach that panic).
 #[test]
 fn hidden_state_import_overflow_is_size_overflow_on_both_paths() {
-    use cortex_tensor::ReferenceExecutor;
-    use cortex_tensor::stage::HiddenStateBuffer;
+    use cortex_hybrid::ReferenceExecutor;
+    use cortex_hybrid::stage::HiddenStateBuffer;
 
     let overflowing = vec![usize::MAX, 2];
     let reference = ReferenceExecutor::import_hidden(&HiddenStateBuffer {

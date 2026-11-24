@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Integration tests for the backend-neutral stage-execution contracts
-//! (`cortex_tensor::stage`) and the dense CPU `ReferenceExecutor`.
+//! (`cortex_hybrid::stage`) and the dense CPU `ReferenceExecutor`.
 //!
 //! Every stage-vs-kernel comparison uses **bitwise** `f32` equality
 //! (`assert_eq!` on `data()` slices): the reference executor delegates to the
@@ -23,13 +23,13 @@
 
 use std::collections::BTreeMap;
 
-use cortex_tensor::stage::{
+use cortex_hybrid::stage::{
     AnnCapabilities, AnnExecutor, AnnStage, AnnTopology, DType, ExternalBindings, NormKind,
     ReferenceExecutor, StageId, StageInput, StageKind, StageSource, StageTensor, run_topology,
 };
-use cortex_tensor::tensor::ops::try_layer_norm;
-use cortex_tensor::transformer::{MultiHeadAttention, TransformerConfig, TransformerLM};
-use cortex_tensor::{CortexError, Result, Tensor};
+use cortex_hybrid::tensor::ops::try_layer_norm;
+use cortex_hybrid::transformer::{MultiHeadAttention, TransformerConfig, TransformerLM};
+use cortex_hybrid::{CortexError, Result, Tensor};
 
 /// Epsilon the reference transformer uses for every LayerNorm, read from the
 /// executor's public constant so hand-bound params cannot drift from
@@ -463,7 +463,7 @@ fn moe_stages_are_rejected_and_rejection_is_atomic() {
     let moe_id = id("expert");
     let mut composed = ReferenceExecutor::new().bind(
         norm_id.clone(),
-        cortex_tensor::stage::ReferenceStageParams::Normalization {
+        cortex_hybrid::stage::ReferenceStageParams::Normalization {
             weight: &model.blocks[0].ln1_w,
             bias: Some(&model.blocks[0].ln1_b),
             eps: LAYER_NORM_EPS,
