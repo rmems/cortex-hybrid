@@ -61,17 +61,20 @@ jobs:
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
-      # Dispatch dry runs must scan the requested tag, not the ref the
-      # workflow was dispatched from; push/release check out the event sha.
+      # Always check out the resolved tag: release events' github.sha can be
+      # the target branch head rather than the tagged commit, and a bare
+      # version could resolve to a same-named branch. refs/tags/ pins the
+      # tag namespace; the tag must exist for dispatch dry runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && steps.version.outputs.tag || github.sha }}
+          ref: refs/tags/${{ steps.version.outputs.tag }}
 
       # Previous release tag becomes the exclusive scan base. With no earlier
-      # v* tag the root commit is the base so the first release still scans
-      # the whole history (<base>..HEAD excludes only the root commit itself).
+      # v* tag the root commit is the base, so the first release scans every
+      # commit except the root itself (<base>..HEAD is exclusive; the root
+      # commit carries no issue/PR references).
       - name: Find previous release tag
         id: release_base
         if: github.event_name != 'workflow_dispatch'
@@ -84,7 +87,9 @@ jobs:
             [[ "${tag}" != "${TAG}" ]] || continue
             echo "base_ref=${tag}" >> "${GITHUB_OUTPUT}"
             exit 0
-          done < <(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname)
+          # versionsort.suffix=- ranks v0.2.0 above v0.2.0-rc.1 so stable
+          # releases stay the base for later stable releases.
+          done < <(git -c versionsort.suffix=- tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname)
           base=$(git rev-list --max-parents=0 HEAD | head -n1)
           echo "::notice title=linear-release::No previous v* tag; syncing from root commit ${base}."
           echo "base_ref=${base}" >> "${GITHUB_OUTPUT}"
