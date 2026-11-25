@@ -15,7 +15,7 @@
 
 use std::any::Any;
 
-use super::SnnEncoder;
+use super::{SnnEncoder, check_snn_channels};
 use crate::error::{CortexError, Result};
 use axon_encoder::Encoder;
 use axon_encoder::prelude::PopulationEncoder;
@@ -51,18 +51,35 @@ const MAX_ENCODER_INPUTS: usize = u16::MAX as usize + 1;
 /// checks the product first and returns [`CortexError::InvalidConfig`],
 /// because the [`Encoder`] trait does not report the width. The `'static`
 /// bound exists so that check can see a concrete `PopulationEncoder` inside
-/// this generic impl; stable Rust has no specialization. Every encoder also
-/// gets a universal `ann_signal.len() <= 65,536` check, because
+/// this generic impl; stable Rust has no specialization.
+///
+/// The automatic check cannot see through a `Box<dyn Encoder>` or a
+/// newtype wrapper: declare the population width explicitly with
+/// [`Self::with_population_neurons`] in that case. Every encoder also gets a
+/// universal `ann_signal.len() <= 65,536` check, because
 /// `EmbeddingRateEncoder` and `DerivativeEncoder` panic on an input index past
 /// `u16::MAX`.
 pub struct AxonEncoder<E> {
     encoder: E,
+    declared_neurons_per_input: Option<usize>,
 }
 
 impl<E> AxonEncoder<E> {
     /// Wrap a configured `axon-encoder` encoder.
     pub fn new(encoder: E) -> Self {
-        Self { encoder }
+        Self {
+            encoder,
+            declared_neurons_per_input: None,
+        }
+    }
+
+    /// Declare the `num_neurons` of a wrapped `PopulationEncoder` so the
+    /// `inputs × neurons` spike-id check still applies when `E` hides the
+    /// concrete type (e.g. `Box<dyn Encoder>` or a newtype). Ignored for
+    /// encoders that are not population encoders.
+    pub fn with_population_neurons(mut self, neurons: usize) -> Self {
+        self.declared_neurons_per_input = Some(neurons);
+        self
     }
 
     pub fn encoder(&self) -> &E {
@@ -80,14 +97,20 @@ where
     E: Encoder + 'static,
 {
     fn encode(&mut self, ann_signal: &[f32], channels: usize) -> Result<Vec<f32>> {
+        check_snn_channels(channels)?;
         if ann_signal.len() > MAX_ENCODER_INPUTS {
             return Err(CortexError::InvalidConfig(format!(
                 "{} inputs exceed the {MAX_ENCODER_INPUTS}-channel u16 id space of axon-encoder spikes",
                 ann_signal.len()
             )));
         }
-        if let Some(population) = (&self.encoder as &dyn Any).downcast_ref::<PopulationEncoder>() {
-            reject_population_width(population.num_neurons(), ann_signal.len())?;
+        let neurons_per_input = self.declared_neurons_per_input.or_else(|| {
+            (&self.encoder as &dyn Any)
+                .downcast_ref::<PopulationEncoder>()
+                .map(|population| population.num_neurons())
+        });
+        if let Some(neurons) = neurons_per_input {
+            reject_population_width(neurons, ann_signal.len())?;
         }
         let mut stimulus = vec![0.0f32; channels];
         let output = self.encoder.encode_step(ann_signal);

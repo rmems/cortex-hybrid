@@ -23,6 +23,11 @@ categories = ["science", "algorithms"]
 # `rust-version` above.
 include = ["src/**", "LICENSE-*", "README.md", "CHANGELOG.md"]
 
+# docs.rs builds every feature so `CandleExecutor` and the SNN adapters get
+# rendered; the `candle` feature is CPU-only by construction.
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 name = "cortex_hybrid"
 path = "src/lib.rs"

@@ -89,7 +89,41 @@ fn spike_count_decoder_counts_per_channel() {
     let out = SnnStepOutput {
         spikes: vec![0, 2, 9],
     };
-    assert_eq!(SpikeCountDecoder.decode(&out, 4), vec![1.0, 0.0, 1.0, 0.0]);
+    assert_eq!(
+        SpikeCountDecoder.decode(&out, 4).unwrap(),
+        vec![1.0, 0.0, 1.0, 0.0]
+    );
+}
+
+#[test]
+fn oversized_channel_counts_are_invalid_config_not_panics() {
+    // Every `channels`-sized allocation on the SNN boundary is bounded by
+    // MAX_SNN_CHANNELS; beyond it the answer is a typed error, not a
+    // capacity-overflow panic or an allocator abort.
+    let mut enc = RateEncoder::default();
+    for channels in [MAX_SNN_CHANNELS + 1, usize::MAX] {
+        assert!(matches!(
+            enc.encode(&[1.0], channels),
+            Err(HybridError::InvalidConfig(_))
+        ));
+    }
+
+    let out = SnnStepOutput { spikes: vec![0] };
+    assert!(matches!(
+        SpikeCountDecoder.decode(&out, MAX_SNN_CHANNELS + 1),
+        Err(HybridError::InvalidConfig(_))
+    ));
+
+    let router = MoeRouter::load_with_mode("", 8, 1, crate::moe::RoutingMode::DenseSim).unwrap();
+    assert!(matches!(
+        SpikingMoeRouter::new(
+            router,
+            MockBackend::new(usize::MAX, 0.0),
+            RateEncoder::default(),
+            SpikeCountDecoder,
+        ),
+        Err(HybridError::InvalidConfig(_))
+    ));
 }
 
 #[test]
@@ -481,12 +515,12 @@ impl SnnBackend for ScriptedBackend {
 struct ScaledCountDecoder(f32);
 
 impl SnnDecoder for ScaledCountDecoder {
-    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Vec<f32> {
-        SpikeCountDecoder
-            .decode(output, channels)
+    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Result<Vec<f32>> {
+        Ok(SpikeCountDecoder
+            .decode(output, channels)?
             .into_iter()
             .map(|count| count * self.0)
-            .collect()
+            .collect())
     }
 }
 
@@ -495,8 +529,8 @@ impl SnnDecoder for ScaledCountDecoder {
 struct FixedReadoutDecoder(Vec<f32>);
 
 impl SnnDecoder for FixedReadoutDecoder {
-    fn decode(&self, _output: &SnnStepOutput, _channels: usize) -> Vec<f32> {
-        self.0.clone()
+    fn decode(&self, _output: &SnnStepOutput, _channels: usize) -> Result<Vec<f32>> {
+        Ok(self.0.clone())
     }
 }
 
@@ -927,6 +961,53 @@ fn derivative_and_embedding_rate_encoders_over_u16_inputs_are_errors_not_panics(
     let mut adapter = AxonEncoder::new(embedding);
     assert!(matches!(
         adapter.encode(&vec![1.0f32; 70_000], 8),
+        Err(HybridError::InvalidConfig(_))
+    ));
+}
+
+/// Newtype wrapper that hides the concrete `PopulationEncoder` from the
+/// `AxonEncoder` downcast — the bypass the declared-width API exists for.
+#[cfg(feature = "axon-encoder")]
+struct WrappedPopulationEncoder(axon_encoder::prelude::PopulationEncoder);
+
+#[cfg(feature = "axon-encoder")]
+impl Encoder for WrappedPopulationEncoder {
+    fn encode(&mut self, input: &[f32]) -> axon_encoder::types::EncodedOutput {
+        self.0.encode(input)
+    }
+
+    fn encode_step(&mut self, input: &[f32]) -> axon_encoder::types::EncodedOutput {
+        self.0.encode_step(input)
+    }
+
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+}
+
+#[cfg(feature = "axon-encoder")]
+#[test]
+fn wrapped_population_encoder_needs_declared_neurons() {
+    let population =
+        || axon_encoder::prelude::PopulationEncoder::try_new(8_193, (0.0, 1.0), 0.2).unwrap();
+
+    // Undeclared: the downcast cannot see through the newtype, so the width
+    // check is skipped and axon-encoder panics inside `encode_step` — pinned
+    // with catch_unwind like the bare-encoder test above.
+    let mut hidden = AxonEncoder::new(WrappedPopulationEncoder(population()));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = hidden.encode(&[0.0; 8], 8);
+    }));
+    assert!(
+        panicked.is_err(),
+        "an undeclared wrapped PopulationEncoder still panics inside axon-encoder"
+    );
+
+    // Declared: the same width is rejected with a typed error instead.
+    let mut declared =
+        AxonEncoder::new(WrappedPopulationEncoder(population())).with_population_neurons(8_193);
+    assert!(matches!(
+        declared.encode(&[0.0; 8], 8),
         Err(HybridError::InvalidConfig(_))
     ));
 }

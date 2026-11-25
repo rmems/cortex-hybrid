@@ -315,9 +315,9 @@ impl TransformerLM {
     }
 }
 
-/// `numel()` of every tensor stored in one block. Unlike
-/// [`TransformerBlock::param_count`], which derives its count from `dim`,
-/// this observes the tensors as they are.
+/// `numel()` of every tensor stored in one block. Equivalent to
+/// [`TransformerBlock::param_count`]; kept as a free function so
+/// [`TransformerModel::param_count`] shares the same sum.
 fn stored_block_params(block: &TransformerBlock) -> usize {
     let attn = &block.attn;
     let ffn = &block.ffn;

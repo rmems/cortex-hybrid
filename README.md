@@ -3,7 +3,7 @@
 Backend-neutral ANN stage layer and deterministic reference backend for hybrid ANN/SNN systems. The in-tree `Vec<f32>` tensor, transformer, and dense MoE path are the reference backend used for CI, golden vectors, and conformance. They are not a generic ML framework, and this crate does not rank external engines.
 
 [![Rust](https://img.shields.io/badge/rust-edition%202024-orange)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-MIT%2FApache-blue)](./LICENSE-APACHE-2.0)
+[![License](https://img.shields.io/badge/license-MIT%2FApache-blue)](https://github.com/rmems/cortex-hybrid/blob/main/LICENSE-APACHE-2.0)
 [![codecov](https://codecov.io/gh/rmems/cortex-hybrid/branch/main/graph/badge.svg)](https://codecov.io/gh/rmems/cortex-hybrid)
 
 ## Overview
@@ -122,7 +122,7 @@ embedding neuron dynamics. This contract has a documented twin in
 [`hybrid-fusion`](https://github.com/rmems/hybrid-fusion) (`SpikingNetwork`,
 `SpikeEncoder`/`SpikeDecoder`, `SpikingExpertRouter`, `NeuromodSnn`) for that
 crate's orchestrator role; the mapping between the two trait sets lives in
-[`docs/snn-contract-mapping.md`](docs/snn-contract-mapping.md) and is enforced
+[`docs/snn-contract-mapping.md`](https://github.com/rmems/cortex-hybrid/blob/main/docs/snn-contract-mapping.md) and is enforced
 by cross-crate parity tests in hybrid-fusion's `smoke/cortex-neuromod` package
 (decision RM-2206 / RM-2360).
 
@@ -364,7 +364,7 @@ RMSNorm moments, and L2 norms accumulate in `f64`.
 Kernels are sequential, so a given input bit pattern is deterministic across debug/release and supported platforms.
 
 The deterministic numerical baseline and coverage inventory live in
-[Reference goldens](tests/fixtures/REFERENCE_GOLDENS.md). Run it with
+[Reference goldens](https://github.com/rmems/cortex-hybrid/blob/main/tests/fixtures/REFERENCE_GOLDENS.md). Run it with
 `cargo test --test reference_goldens`; intentional expectation changes require
 a documented semantic reason and independent arithmetic review.
 
@@ -433,7 +433,7 @@ Linked work, not implemented by the boundary-reset docs:
 
 This project is licensed under either of
 
-- Apache License, Version 2.0 ([LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) or [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0))
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE-2.0](https://github.com/rmems/cortex-hybrid/blob/main/LICENSE-APACHE-2.0) or [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0))
+- MIT license ([LICENSE-MIT](https://github.com/rmems/cortex-hybrid/blob/main/LICENSE-MIT) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
 
 at your option.
