@@ -8,13 +8,13 @@
 
 use std::collections::BTreeSet;
 
-use cortex_tensor::stage::{
+use cortex_hybrid::stage::{
     AnnCapabilities, AnnExecutor, AnnStage, AnnTopology, BackendLimitations, DType, DeviceClass,
     ExternalAdapter, ExternalBindings, HiddenStateBuffer, ReferenceExecutor, StageId, StageInput,
     StageKind, StageKindTag, StageSource, StageTensor, run_topology,
 };
-use cortex_tensor::transformer::{TransformerConfig, TransformerLM};
-use cortex_tensor::{CortexError, Result, Tensor};
+use cortex_hybrid::transformer::{TransformerConfig, TransformerLM};
+use cortex_hybrid::{CortexError, Result, Tensor};
 
 fn tiny_model(layers: usize) -> TransformerLM {
     TransformerLM::try_new(TransformerConfig {
@@ -266,8 +266,8 @@ fn probe_capabilities(
     supported_dtypes: BTreeSet<DType>,
     devices: BTreeSet<DeviceClass>,
     limitations: BackendLimitations,
-) -> cortex_tensor::stage::AdapterCapabilities {
-    cortex_tensor::stage::AdapterCapabilities {
+) -> cortex_hybrid::stage::AdapterCapabilities {
+    cortex_hybrid::stage::AdapterCapabilities {
         ann: AnnCapabilities {
             backend_name: "probe",
             supported_tags,
@@ -453,7 +453,7 @@ fn require_supported_rejects_capabilities_the_adapter_never_listed() {
 fn generic_adapter_moves_hidden_state_without_naming_the_backend() {
     fn round_trip<A>(adapter: &A, tensor: &A::Tensor) -> A::Tensor
     where
-        A: cortex_tensor::stage::ExternalAdapterMarker,
+        A: cortex_hybrid::stage::ExternalAdapterMarker,
     {
         let buffer = ExternalAdapter::export_hidden(adapter, tensor).expect("export");
         ExternalAdapter::import_hidden(adapter, &buffer).expect("import")
@@ -469,7 +469,7 @@ fn generic_adapter_moves_hidden_state_without_naming_the_backend() {
 
 fn _adapter_object_safety() {
     // Native engine types cannot satisfy this bound: it names only cortex types.
-    fn assert_adapter<T: cortex_tensor::stage::ExternalAdapterMarker<Tensor = Tensor>>(_: &T) {}
+    fn assert_adapter<T: cortex_hybrid::stage::ExternalAdapterMarker<Tensor = Tensor>>(_: &T) {}
     let model = tiny_model(0);
     let (executor, _) = ReferenceExecutor::from_transformer(&model).expect("bind");
     assert_adapter(&executor);
@@ -479,7 +479,7 @@ fn _adapter_object_safety() {
 fn burn_feature_stays_a_structured_stub_on_this_toolchain() {
     #[cfg(feature = "burn")]
     {
-        use cortex_tensor::stage::BurnAdapter;
+        use cortex_hybrid::stage::BurnAdapter;
         let adapter = BurnAdapter::unavailable();
         let caps = ExternalAdapter::capabilities(&adapter);
         assert_eq!(caps.ann.backend_name, "burn");

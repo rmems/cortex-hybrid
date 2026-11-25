@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use cortex_tensor::transformer::block::FeedForward;
-use cortex_tensor::transformer::{
+use cortex_hybrid::transformer::block::FeedForward;
+use cortex_hybrid::transformer::{
     MultiHeadAttention, TransformerBlock, TransformerConfig, TransformerLM,
 };
-use cortex_tensor::{CortexError, Tensor, reference_json};
+use cortex_hybrid::{CortexError, Tensor, reference_json};
 use serde_json::json;
 
 fn config() -> TransformerConfig {
@@ -61,7 +61,7 @@ fn tensor_rejects_hostile_json() {
     ];
     for value in cases {
         let wire = value.to_string();
-        let result: cortex_tensor::Result<Tensor> = serde_json::from_str(&wire).map_err(Into::into);
+        let result: cortex_hybrid::Result<Tensor> = serde_json::from_str(&wire).map_err(Into::into);
         assert!(result.is_err(), "accepted {wire}");
     }
     for wire in [
@@ -200,7 +200,7 @@ fn standalone_ffn_and_block_wire_reject_zero_extents() {
 
 #[test]
 fn routing_mode_serializes_as_slug_wire_form() {
-    use cortex_tensor::moe::RoutingMode;
+    use cortex_hybrid::moe::RoutingMode;
 
     for (mode, slug) in [
         (RoutingMode::StubUniform, "stub_uniform"),
@@ -214,7 +214,7 @@ fn routing_mode_serializes_as_slug_wire_form() {
 
 #[test]
 fn routing_mode_accepts_legacy_pascal_case_aliases() {
-    use cortex_tensor::moe::RoutingMode;
+    use cortex_hybrid::moe::RoutingMode;
 
     for (name, mode) in [
         ("StubUniform", RoutingMode::StubUniform),
@@ -227,7 +227,7 @@ fn routing_mode_accepts_legacy_pascal_case_aliases() {
 
 #[test]
 fn routing_mode_rejects_unknown_strings() {
-    use cortex_tensor::moe::RoutingMode;
+    use cortex_hybrid::moe::RoutingMode;
 
     for name in [
         "SpikingSim",

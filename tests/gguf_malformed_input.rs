@@ -10,8 +10,8 @@
 //! bytes so the shapes under test (wrapping sizes, misaligned offsets, deep
 //! nesting) are exactly what the GGUF spec forbids or leaves unguarded.
 
-use cortex_tensor::CortexError;
-use cortex_tensor::moe::{MoeRouter, RoutingMode};
+use cortex_hybrid::CortexError;
+use cortex_hybrid::moe::{MoeRouter, RoutingMode};
 use std::path::PathBuf;
 
 const GGUF_MAGIC: &[u8; 4] = b"GGUF";
@@ -382,7 +382,7 @@ fn misaligned_tensor_offsets_never_reach_unsafe_alignment_assumptions() {
                 row, expected,
                 "byte-wise decode must not depend on alignment"
             );
-            let embedding = vec![1.0f32; cortex_tensor::types::EMBEDDING_DIM];
+            let embedding = vec![1.0f32; cortex_hybrid::types::EMBEDDING_DIM];
             let out = router.forward(&embedding).unwrap();
             assert!(out.expert_weights.iter().all(|w| w.is_finite()));
         }

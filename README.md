@@ -137,12 +137,12 @@ by cross-crate parity tests in hybrid-fusion's `smoke/cortex-neuromod` package
 
 ```toml
 [dependencies]
-cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", branch = "main", features = ["neuromod"] }
+cortex-hybrid = { version = "0.2", features = ["neuromod"] }
 ```
 
 ```rust
-use cortex_tensor::moe::{MoeRouter, RoutingMode};
-use cortex_tensor::snn::{NeuromodNetwork, RateEncoder, SpikingMoeRouter, SpikeCountDecoder};
+use cortex_hybrid::moe::{MoeRouter, RoutingMode};
+use cortex_hybrid::snn::{NeuromodNetwork, RateEncoder, SpikingMoeRouter, SpikeCountDecoder};
 
 let router = MoeRouter::load("model.gguf", 0, 2)?; // RoutingMode::default() == DenseSim
 let backend = NeuromodNetwork::new(/* lif */ 8, /* izh */ 0, /* channels */ 8)?;
@@ -312,12 +312,12 @@ Q6_K token rows call `engram_parser::dequantize_q6_k`. That is the same live pat
 
 ## Install
 
-The package is `cortex-hybrid`; the library name stays `cortex_tensor`,
-so `use cortex_tensor::…` imports are unchanged.
+The package is `cortex-hybrid` and the library is `cortex_hybrid`,
+so imports are `use cortex_hybrid::…`.
 
 ```toml
 [dependencies]
-cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", branch = "main" }
+cortex-hybrid = "0.2"
 ```
 
 Features (all off by default):
@@ -332,8 +332,8 @@ Features (all off by default):
 ## Quick start
 
 ```rust
-use cortex_tensor::tensor::ops::{matmul, try_matmul};
-use cortex_tensor::Tensor;
+use cortex_hybrid::tensor::ops::{matmul, try_matmul};
+use cortex_hybrid::Tensor;
 
 let a = Tensor::try_from_vec(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
 let b = Tensor::try_from_vec(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]).unwrap();
@@ -378,7 +378,7 @@ a documented semantic reason and independent arithmetic review.
 Building a transformer block:
 
 ```rust
-use cortex_tensor::transformer::{MultiHeadAttention, TransformerBlock};
+use cortex_hybrid::transformer::{MultiHeadAttention, TransformerBlock};
 
 let attn = MultiHeadAttention::new(/* dim */ 512, /* num_heads */ 8);
 let block = TransformerBlock::new(/* dim */ 512, /* num_heads */ 8, /* mlp_dim */ 2048);
@@ -387,9 +387,9 @@ let block = TransformerBlock::new(/* dim */ 512, /* num_heads */ 8, /* mlp_dim *
 Loading a MoE GGUF checkpoint and running the router:
 
 ```rust
-use cortex_tensor::moe::{ExtractTokenOptions, MoeRouter, RoutingMode};
+use cortex_hybrid::moe::{ExtractTokenOptions, MoeRouter, RoutingMode};
 
-fn main() -> cortex_tensor::Result<()> {
+fn main() -> cortex_hybrid::Result<()> {
     let mut router = MoeRouter::load_with_mode(
         "path/to/model.gguf",
         /* num_experts */ 0, // 0 → take count from checkpoint metadata

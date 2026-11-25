@@ -5,13 +5,13 @@
 #[path = "support/golden.rs"]
 mod golden;
 
-use cortex_tensor::moe::{EMBEDDING_DIM, MoeRouter, RoutingMode};
-use cortex_tensor::tensor::ops::*;
-use cortex_tensor::transformer::block::FeedForward;
-use cortex_tensor::transformer::{
+use cortex_hybrid::moe::{EMBEDDING_DIM, MoeRouter, RoutingMode};
+use cortex_hybrid::tensor::ops::*;
+use cortex_hybrid::transformer::block::FeedForward;
+use cortex_hybrid::transformer::{
     MultiHeadAttention, TransformerBlock, TransformerConfig, TransformerLM,
 };
-use cortex_tensor::{CortexError, Tensor};
+use cortex_hybrid::{CortexError, Tensor};
 use golden::Golden;
 
 fn t(shape: &[usize], data: &[f32]) -> Tensor {

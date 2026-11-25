@@ -4,13 +4,13 @@
 //! for pre-1.0 source compatibility. If a signature here fails to compile, the
 //! wrapper was removed or changed without a SemVer decision (see RM-1353).
 
-use cortex_tensor::stage::{AnnStage, AnnTopology, ReferenceExecutor, StageId};
-use cortex_tensor::tensor::ops::{
+use cortex_hybrid::stage::{AnnStage, AnnTopology, ReferenceExecutor, StageId};
+use cortex_hybrid::tensor::ops::{
     batched_matmul, embedding, layer_norm, matmul, rms_norm, try_batched_matmul, try_causal_mask,
     try_embedding, try_layer_norm, try_matmul, try_rms_norm,
 };
-use cortex_tensor::transformer::TransformerLM;
-use cortex_tensor::{Result, Tensor};
+use cortex_hybrid::transformer::TransformerLM;
+use cortex_hybrid::{Result, Tensor};
 
 #[test]
 fn retained_panic_wrappers_have_stable_signatures() {
@@ -64,7 +64,7 @@ fn stage_execution_apis_have_stable_signatures() {
     }
     // Reference the pin so it is not dead code; invoking it on a throwaway model
     // forces the compiler to resolve the exact borrowed-return signature.
-    let model = TransformerLM::try_new(cortex_tensor::transformer::TransformerConfig {
+    let model = TransformerLM::try_new(cortex_hybrid::transformer::TransformerConfig {
         vocab_size: 4,
         dim: 8,
         num_heads: 2,
@@ -78,12 +78,12 @@ fn stage_execution_apis_have_stable_signatures() {
 
 #[test]
 fn external_adapter_contract_is_public() {
-    use cortex_tensor::stage::{
+    use cortex_hybrid::stage::{
         AdapterCapabilities, AnnCapabilities, BackendLimitations, DType, DeviceClass,
         ExternalAdapter, ExternalAdapterMarker, HiddenStateBuffer, NegotiationDocument, StageKind,
     };
 
-    fn marker<T: ExternalAdapterMarker<Tensor = cortex_tensor::Tensor>>() {}
+    fn marker<T: ExternalAdapterMarker<Tensor = cortex_hybrid::Tensor>>() {}
     marker::<ReferenceExecutor<'static>>();
 
     let caps = AnnCapabilities {
@@ -106,9 +106,9 @@ fn external_adapter_contract_is_public() {
         },
     };
     let doc: NegotiationDocument = report.negotiation_document();
-    let _: fn(&Tensor) -> cortex_tensor::Result<HiddenStateBuffer> =
+    let _: fn(&Tensor) -> cortex_hybrid::Result<HiddenStateBuffer> =
         ReferenceExecutor::export_hidden;
-    let _: fn(&HiddenStateBuffer) -> cortex_tensor::Result<Tensor> =
+    let _: fn(&HiddenStateBuffer) -> cortex_hybrid::Result<Tensor> =
         ReferenceExecutor::import_hidden;
     let _: ExternalAdapter = ExternalAdapter;
     let _: fn(
@@ -117,7 +117,7 @@ fn external_adapter_contract_is_public() {
         &StageKind,
         DType,
         DeviceClass,
-    ) -> cortex_tensor::Result<()> = AdapterCapabilities::require_supported;
+    ) -> cortex_hybrid::Result<()> = AdapterCapabilities::require_supported;
     assert_eq!(DeviceClass::Cpu.as_str(), "cpu");
     assert_eq!(doc.backend_name, "pin");
 }

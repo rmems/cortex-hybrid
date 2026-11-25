@@ -1,6 +1,6 @@
 [package]
 name = "cortex-hybrid"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # MSRV for dependents: the verified floor, set by `engram-parser` 0.3.0
 # (1.97.1). `neuromod` needs 1.98.1 and `axon-encoder` needs 1.99.0. The development
@@ -15,8 +15,6 @@ homepage = "https://github.com/rmems/cortex-hybrid"
 documentation = "https://docs.rs/cortex-hybrid"
 keywords = ["tensor", "transformer", "mixture-of-experts", "snn", "neural-network"]
 categories = ["science", "algorithms"]
-# Not released yet. Remove when a crates.io release is intended (#116).
-publish = false
 # crates.io surface: sources, licenses, README and CHANGELOG only. An allow
 # list, so new repo-only files (agent/CI config, tests, fixtures, compat/)
 # stay out without editing an exclude list. Cargo adds Cargo.toml and
@@ -26,7 +24,7 @@ publish = false
 include = ["src/**", "LICENSE-*", "README.md", "CHANGELOG.md"]
 
 [lib]
-name = "cortex_tensor"
+name = "cortex_hybrid"
 path = "src/lib.rs"
 
 [features]

@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
 ### Packaging
 
-- **Rename to `cortex-hybrid`** (RM-2479 / #172): the package and repo are renamed because the original crates.io name was already taken by another owner. The lib name stays `cortex_tensor`, so `use cortex_tensor::…` imports are unchanged; dependents write `cortex-hybrid = "…"`. Repository, homepage and docs.rs metadata point at `cortex-hybrid`.
+- **First crates.io release** (RM-2586 / #177): `publish = false` removed and the version set to 0.2.0 (the Linear milestone's "v0.2 — Boundary reset & reference backend"; the 0.1.0 manifest version was never released). **Breaking:** the lib target is renamed `cortex_tensor` → `cortex_hybrid`, so `use cortex_hybrid::…` matches the package name — free while unpublished. `rust-version` stays 1.97.1 (the floor set by the published engram-parser 0.3.0); the 1.88.0 floor waits for the engram-parser / axon-encoder releases that carry it.
+- **Rename to `cortex-hybrid`** (RM-2479 / #172): the package and repo are renamed because the original crates.io name was already taken by another owner. Dependents write `cortex-hybrid = "…"`; the lib target kept the `cortex_tensor` name until the publish prep above. Repository, homepage and docs.rs metadata point at `cortex-hybrid`.
 
 ### CI
 
