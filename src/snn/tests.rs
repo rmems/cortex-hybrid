@@ -1014,6 +1014,20 @@ fn wrapped_population_encoder_needs_declared_neurons() {
 
 #[cfg(feature = "axon-encoder")]
 #[test]
+fn concrete_population_width_outranks_a_stale_declaration() {
+    // A live `PopulationEncoder` reports its own `num_neurons`; a declared
+    // width must not mask a wider real configuration (e.g. after an
+    // `encoder_mut` swap or a wrong declaration).
+    let enc = axon_encoder::prelude::PopulationEncoder::try_new(8_193, (0.0, 1.0), 0.2).unwrap();
+    let mut adapter = AxonEncoder::new(enc).with_population_neurons(8);
+    assert!(matches!(
+        adapter.encode(&[0.0; 8], 8),
+        Err(HybridError::InvalidConfig(_))
+    ));
+}
+
+#[cfg(feature = "axon-encoder")]
+#[test]
 fn population_encoder_over_u16_fails_closed_before_the_backend_steps() {
     let enc = axon_encoder::prelude::PopulationEncoder::try_new(8_193, (0.0, 1.0), 0.2).unwrap();
     let router = MoeRouter::load_with_mode("", 8, 1, crate::moe::RoutingMode::DenseSim).unwrap();

@@ -76,9 +76,13 @@ impl<E> AxonEncoder<E> {
     /// Declare the `num_neurons` of a wrapped `PopulationEncoder` so the
     /// `inputs × neurons` spike-id check still applies when `E` hides the
     /// concrete type (e.g. a newtype; `Box<dyn Encoder>` cannot satisfy the
-    /// `Encoder` bound directly). The declared width is enforced for any
-    /// encoder it is set on, so only declare it for population encoders —
-    /// other encoders do not fan each input out over `neurons` channels.
+    /// `Encoder` bound directly). Only consulted when the downcast cannot
+    /// see a concrete `PopulationEncoder` — a live encoder's own
+    /// `num_neurons()` always wins, so a stale or swapped-in encoder cannot
+    /// be checked against the wrong width. The declared width is enforced
+    /// for whatever encoder it applies to, so only declare it for
+    /// population encoders — other encoders do not fan each input out over
+    /// `neurons` channels.
     pub fn with_population_neurons(mut self, neurons: usize) -> Self {
         self.declared_neurons_per_input = Some(neurons);
         self
@@ -106,11 +110,14 @@ where
                 ann_signal.len()
             )));
         }
-        let neurons_per_input = self.declared_neurons_per_input.or_else(|| {
-            (&self.encoder as &dyn Any)
-                .downcast_ref::<PopulationEncoder>()
-                .map(|population| population.num_neurons())
-        });
+        // A concrete `PopulationEncoder` reports its own width, which stays
+        // authoritative even after `encoder_mut` swaps it; the declared
+        // width is only the fallback for wrapped encoders the downcast
+        // cannot see.
+        let neurons_per_input = (&self.encoder as &dyn Any)
+            .downcast_ref::<PopulationEncoder>()
+            .map(|population| population.num_neurons())
+            .or(self.declared_neurons_per_input);
         if let Some(neurons) = neurons_per_input {
             reject_population_width(neurons, ann_signal.len())?;
         }
