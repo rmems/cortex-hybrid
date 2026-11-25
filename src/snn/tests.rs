@@ -163,6 +163,17 @@ impl SnnBackend for GrowingBackend {
     }
 }
 
+/// Encoder that ignores the channel width and returns a fixed small
+/// stimulus, so the test can distinguish the router's own width guard from
+/// the cap inside `RateEncoder`.
+struct LenientEncoder;
+
+impl SnnEncoder for LenientEncoder {
+    fn encode(&mut self, _ann_signal: &[f32], _channels: usize) -> Result<Vec<f32>> {
+        Ok(vec![0.0; 4])
+    }
+}
+
 #[test]
 fn backend_channel_growth_is_rejected_before_and_after_the_tick() {
     let router = || MoeRouter::load_with_mode("", 8, 1, crate::moe::RoutingMode::DenseSim).unwrap();
@@ -175,14 +186,12 @@ fn backend_channel_growth_is_rejected_before_and_after_the_tick() {
     // channels() call order per forward: new() reads it twice (cap check,
     // then the expert-count check), then pre-step, then post-step — so
     // call indices 0-1 are construction, 2 is pre-step, 3 is post-step.
-    // Growth visible at the pre-step read: the tick never runs.
-    let mut model = SpikingMoeRouter::new(
-        router(),
-        growing(2),
-        RateEncoder::default(),
-        SpikeCountDecoder,
-    )
-    .unwrap();
+    // Growth visible at the pre-step read: the tick never runs. The lenient
+    // encoder does not cap channels itself, so an `InvalidConfig` here can
+    // only come from the router's width guard — without it the encoder
+    // would run and the fixed stimulus would fail as `SnnStimulusLength`.
+    let mut model =
+        SpikingMoeRouter::new(router(), growing(2), LenientEncoder, SpikeCountDecoder).unwrap();
     assert!(matches!(
         model.forward(&[1.0; EMBEDDING_DIM]),
         Err(HybridError::InvalidConfig(_))
