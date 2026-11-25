@@ -53,9 +53,9 @@ const MAX_ENCODER_INPUTS: usize = u16::MAX as usize + 1;
 /// bound exists so that check can see a concrete `PopulationEncoder` inside
 /// this generic impl; stable Rust has no specialization.
 ///
-/// The automatic check cannot see through a `Box<dyn Encoder>` or a
-/// newtype wrapper: declare the population width explicitly with
-/// [`Self::with_population_neurons`] in that case. Every encoder also gets a
+/// The automatic check cannot see through a newtype wrapper: declare the
+/// population width explicitly with [`Self::with_population_neurons`] in
+/// that case. Every encoder also gets a
 /// universal `ann_signal.len() <= 65,536` check, because
 /// `EmbeddingRateEncoder` and `DerivativeEncoder` panic on an input index past
 /// `u16::MAX`.
@@ -75,8 +75,10 @@ impl<E> AxonEncoder<E> {
 
     /// Declare the `num_neurons` of a wrapped `PopulationEncoder` so the
     /// `inputs × neurons` spike-id check still applies when `E` hides the
-    /// concrete type (e.g. `Box<dyn Encoder>` or a newtype). Ignored for
-    /// encoders that are not population encoders.
+    /// concrete type (e.g. a newtype; `Box<dyn Encoder>` cannot satisfy the
+    /// `Encoder` bound directly). The declared width is enforced for any
+    /// encoder it is set on, so only declare it for population encoders —
+    /// other encoders do not fan each input out over `neurons` channels.
     pub fn with_population_neurons(mut self, neurons: usize) -> Self {
         self.declared_neurons_per_input = Some(neurons);
         self
