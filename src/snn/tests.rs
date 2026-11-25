@@ -89,7 +89,129 @@ fn spike_count_decoder_counts_per_channel() {
     let out = SnnStepOutput {
         spikes: vec![0, 2, 9],
     };
-    assert_eq!(SpikeCountDecoder.decode(&out, 4), vec![1.0, 0.0, 1.0, 0.0]);
+    assert_eq!(
+        SpikeCountDecoder.decode(&out, 4).unwrap(),
+        vec![1.0, 0.0, 1.0, 0.0]
+    );
+}
+
+#[test]
+fn oversized_channel_counts_are_invalid_config_not_panics() {
+    // Every `channels`-sized allocation on the SNN boundary is bounded by
+    // MAX_SNN_CHANNELS; beyond it the answer is a typed error, not a
+    // capacity-overflow panic or an allocator abort.
+    let mut enc = RateEncoder::default();
+    for channels in [MAX_SNN_CHANNELS + 1, usize::MAX] {
+        assert!(matches!(
+            enc.encode(&[1.0], channels),
+            Err(HybridError::InvalidConfig(_))
+        ));
+    }
+
+    let out = SnnStepOutput { spikes: vec![0] };
+    assert!(matches!(
+        SpikeCountDecoder.decode(&out, MAX_SNN_CHANNELS + 1),
+        Err(HybridError::InvalidConfig(_))
+    ));
+
+    let router = MoeRouter::load_with_mode("", 8, 1, crate::moe::RoutingMode::DenseSim).unwrap();
+    assert!(matches!(
+        SpikingMoeRouter::new(
+            router,
+            MockBackend::new(usize::MAX, 0.0),
+            RateEncoder::default(),
+            SpikeCountDecoder,
+        ),
+        Err(HybridError::InvalidConfig(_))
+    ));
+}
+
+/// Backend whose reported width jumps to `usize::MAX` on the
+/// `huge_from_call`-th `channels()` invocation, modelling a backend that
+/// grows between the router's construction, pre-step and post-step reads.
+struct GrowingBackend {
+    inner: MockBackend,
+    calls: std::cell::Cell<usize>,
+    huge_from_call: usize,
+}
+
+impl SnnBackend for GrowingBackend {
+    fn channels(&self) -> usize {
+        let n = self.calls.get();
+        self.calls.set(n + 1);
+        if n >= self.huge_from_call {
+            usize::MAX
+        } else {
+            self.inner.channels()
+        }
+    }
+
+    fn step(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
+        self.inner.step(stimulus)
+    }
+
+    fn step_frozen(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
+        self.inner.step_frozen(stimulus)
+    }
+
+    fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    fn capabilities(&self) -> SnnCapabilities {
+        self.inner.capabilities()
+    }
+}
+
+/// Encoder that ignores the channel width and returns a fixed small
+/// stimulus, so the test can distinguish the router's own width guard from
+/// the cap inside `RateEncoder`.
+struct LenientEncoder;
+
+impl SnnEncoder for LenientEncoder {
+    fn encode(&mut self, _ann_signal: &[f32], _channels: usize) -> Result<Vec<f32>> {
+        Ok(vec![0.0; 4])
+    }
+}
+
+#[test]
+fn backend_channel_growth_is_rejected_before_and_after_the_tick() {
+    let router = || MoeRouter::load_with_mode("", 8, 1, crate::moe::RoutingMode::DenseSim).unwrap();
+    let growing = |huge_from_call| GrowingBackend {
+        inner: MockBackend::new(8, 0.0),
+        calls: std::cell::Cell::new(0),
+        huge_from_call,
+    };
+
+    // channels() call order per forward: new() reads it twice (cap check,
+    // then the expert-count check), then pre-step, then post-step — so
+    // call indices 0-1 are construction, 2 is pre-step, 3 is post-step.
+    // Growth visible at the pre-step read: the tick never runs. The lenient
+    // encoder does not cap channels itself, so an `InvalidConfig` here can
+    // only come from the router's width guard — without it the encoder
+    // would run and the fixed stimulus would fail as `SnnStimulusLength`.
+    let mut model =
+        SpikingMoeRouter::new(router(), growing(2), LenientEncoder, SpikeCountDecoder).unwrap();
+    assert!(matches!(
+        model.forward(&[1.0; EMBEDDING_DIM]),
+        Err(HybridError::InvalidConfig(_))
+    ));
+    assert_eq!(model.backend().inner.steps, 0);
+
+    // Growth only visible after the step: the tick is consumed, then the
+    // post-step width check rejects before spike validation allocates.
+    let mut model = SpikingMoeRouter::new(
+        router(),
+        growing(3),
+        RateEncoder::default(),
+        SpikeCountDecoder,
+    )
+    .unwrap();
+    assert!(matches!(
+        model.forward(&[1.0; EMBEDDING_DIM]),
+        Err(HybridError::InvalidConfig(_))
+    ));
+    assert_eq!(model.backend().inner.steps, 1);
 }
 
 #[test]
@@ -481,12 +603,12 @@ impl SnnBackend for ScriptedBackend {
 struct ScaledCountDecoder(f32);
 
 impl SnnDecoder for ScaledCountDecoder {
-    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Vec<f32> {
-        SpikeCountDecoder
-            .decode(output, channels)
+    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Result<Vec<f32>> {
+        Ok(SpikeCountDecoder
+            .decode(output, channels)?
             .into_iter()
             .map(|count| count * self.0)
-            .collect()
+            .collect())
     }
 }
 
@@ -495,8 +617,8 @@ impl SnnDecoder for ScaledCountDecoder {
 struct FixedReadoutDecoder(Vec<f32>);
 
 impl SnnDecoder for FixedReadoutDecoder {
-    fn decode(&self, _output: &SnnStepOutput, _channels: usize) -> Vec<f32> {
-        self.0.clone()
+    fn decode(&self, _output: &SnnStepOutput, _channels: usize) -> Result<Vec<f32>> {
+        Ok(self.0.clone())
     }
 }
 
@@ -927,6 +1049,67 @@ fn derivative_and_embedding_rate_encoders_over_u16_inputs_are_errors_not_panics(
     let mut adapter = AxonEncoder::new(embedding);
     assert!(matches!(
         adapter.encode(&vec![1.0f32; 70_000], 8),
+        Err(HybridError::InvalidConfig(_))
+    ));
+}
+
+/// Newtype wrapper that hides the concrete `PopulationEncoder` from the
+/// `AxonEncoder` downcast — the bypass the declared-width API exists for.
+#[cfg(feature = "axon-encoder")]
+struct WrappedPopulationEncoder(axon_encoder::prelude::PopulationEncoder);
+
+#[cfg(feature = "axon-encoder")]
+impl Encoder for WrappedPopulationEncoder {
+    fn encode(&mut self, input: &[f32]) -> axon_encoder::types::EncodedOutput {
+        self.0.encode(input)
+    }
+
+    fn encode_step(&mut self, input: &[f32]) -> axon_encoder::types::EncodedOutput {
+        self.0.encode_step(input)
+    }
+
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+}
+
+#[cfg(feature = "axon-encoder")]
+#[test]
+fn wrapped_population_encoder_needs_declared_neurons() {
+    let population =
+        || axon_encoder::prelude::PopulationEncoder::try_new(8_193, (0.0, 1.0), 0.2).unwrap();
+
+    // Undeclared: the downcast cannot see through the newtype, so the width
+    // check is skipped and axon-encoder panics inside `encode_step` — pinned
+    // with catch_unwind like the bare-encoder test above.
+    let mut hidden = AxonEncoder::new(WrappedPopulationEncoder(population()));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = hidden.encode(&[0.0; 8], 8);
+    }));
+    assert!(
+        panicked.is_err(),
+        "an undeclared wrapped PopulationEncoder still panics inside axon-encoder"
+    );
+
+    // Declared: the same width is rejected with a typed error instead.
+    let mut declared =
+        AxonEncoder::new(WrappedPopulationEncoder(population())).with_population_neurons(8_193);
+    assert!(matches!(
+        declared.encode(&[0.0; 8], 8),
+        Err(HybridError::InvalidConfig(_))
+    ));
+}
+
+#[cfg(feature = "axon-encoder")]
+#[test]
+fn concrete_population_width_outranks_a_stale_declaration() {
+    // A live `PopulationEncoder` reports its own `num_neurons`; a declared
+    // width must not mask a wider real configuration (e.g. after an
+    // `encoder_mut` swap or a wrong declaration).
+    let enc = axon_encoder::prelude::PopulationEncoder::try_new(8_193, (0.0, 1.0), 0.2).unwrap();
+    let mut adapter = AxonEncoder::new(enc).with_population_neurons(8);
+    assert!(matches!(
+        adapter.encode(&[0.0; 8], 8),
         Err(HybridError::InvalidConfig(_))
     ));
 }

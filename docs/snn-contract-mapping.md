@@ -53,7 +53,7 @@ the pinned tree.
 | `SnnCapabilities { backend_name, frozen_evaluation, plasticity, caller_rng, neuromodulation }` | `BackendCapabilities::snn(..)` + `RequiredFeature` strings `step`, `frozen_evaluation`, `plasticity`, `caller_rng`, `neuromodulation` | two vocabularies for the same facts; both adapters report identical values |
 | `SnnStepOutput { spikes: Vec<usize> }` | `Vec<usize>` fired IDs | same index space (`0..` output population) |
 | `SnnEncoder::encode(&ann_signal, channels)`, `reset()` | `SpikeEncoder::encode`, `reset()`, plus `encoding()` (`SpikeEncoding` plan-port metadata) | identical semantics; hybrid-fusion adds declared metadata |
-| `SnnDecoder::decode(&SnnStepOutput, channels) -> Vec<f32>` (infallible) | `SpikeDecoder::decode(&[usize], num_neurons) -> Result<Vec<f32>>`, plus `decoding()` metadata | sized by channel count vs output population; infallible vs fail-closed |
+| `SnnDecoder::decode(&SnnStepOutput, channels) -> Result<Vec<f32>>`, capped at `MAX_SNN_CHANNELS` | `SpikeDecoder::decode(&[usize], num_neurons) -> Result<Vec<f32>>`, plus `decoding()` metadata | both fallible; sized by channel count vs output population |
 | `RateEncoder { gain }` | `RateEncoder { gain }` | identical tiling semantics |
 | `SpikeCountDecoder` | `SpikeCountDecoder` | counts per channel / per neuron; out-of-range IDs silently dropped vs rejected (see below) |
 | `SpikingMoeRouter<B, E, D>` over the concrete `MoeRouter` | `SpikingExpertRouter<R, S, E, D>` over any `ExpertRouter` | same pipeline: gate scores → encode → step → decode → additive spike boost → top-k |
@@ -78,13 +78,14 @@ own side; this document records the boundary.
    `neuromod` reports LIF spikes only. hybrid-fusion separates stimulus width
    from output population (`NeuromodSnn::with_seed(4, 8, ..)` is fine), and
    its `identity_wired` is the one-neuron-per-channel special case.
-2. **Decoder fallibility and sizing.** `SnnDecoder` is infallible, sized by
-   the channel count, and `SpikeCountDecoder` silently drops out-of-range
-   IDs; `SpikingMoeRouter` validates the spike list before decoding, so a
-   compliant flow never reaches the decoder with a bad ID. hybrid-fusion's
-   decoder is fallible, sized by `num_neurons`, and **rejects** out-of-range
-   fired IDs. Both *hosts* reject out-of-range and duplicate fired IDs with
-   equivalent typed errors; only standalone-decoder behavior differs.
+2. **Decoder sizing.** `SnnDecoder` is fallible and sized by the channel
+   count (capped at `MAX_SNN_CHANNELS`), and `SpikeCountDecoder` silently
+   drops out-of-range IDs; `SpikingMoeRouter` validates the spike list
+   before decoding, so a compliant flow never reaches the decoder with a bad
+   ID. hybrid-fusion's decoder is sized by `num_neurons` and **rejects**
+   out-of-range fired IDs. Both *hosts* reject out-of-range and duplicate
+   fired IDs with equivalent typed errors; only standalone-decoder behavior
+   differs.
 3. **Reset and replay.** `NeuromodNetwork::reset` rewinds the replay RNG to
    its seed and keeps learned weights (neuromod's reset does not touch them);
    replay after `reset` is exact for frozen-only stepping.

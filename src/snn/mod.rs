@@ -123,8 +123,10 @@ pub trait SnnEncoder {
 
 /// SNN → ANN boundary: map one step of spikes into per-channel f32 readouts.
 pub trait SnnDecoder {
-    /// Produce a readout vector of exactly `channels` length.
-    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Vec<f32>;
+    /// Produce a readout vector of exactly `channels` length, or an error
+    /// when `channels` exceeds [`MAX_SNN_CHANNELS`] and the readout cannot
+    /// be allocated safely.
+    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Result<Vec<f32>>;
 }
 
 /// Linear encoder: scales each input by `gain` and tiles it across the
@@ -144,6 +146,7 @@ impl Default for RateEncoder {
 
 impl SnnEncoder for RateEncoder {
     fn encode(&mut self, ann_signal: &[f32], channels: usize) -> Result<Vec<f32>> {
+        check_snn_channels(channels)?;
         let mut stimulus = vec![0.0f32; channels];
         if ann_signal.is_empty() {
             return Ok(stimulus);
@@ -163,14 +166,15 @@ impl SnnEncoder for RateEncoder {
 pub struct SpikeCountDecoder;
 
 impl SnnDecoder for SpikeCountDecoder {
-    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Vec<f32> {
+    fn decode(&self, output: &SnnStepOutput, channels: usize) -> Result<Vec<f32>> {
+        check_snn_channels(channels)?;
         let mut counts = vec![0.0f32; channels];
         for &idx in &output.spikes {
             if idx < channels {
                 counts[idx] += 1.0;
             }
         }
-        counts
+        Ok(counts)
     }
 }
 
@@ -232,8 +236,29 @@ where
 /// spike on a channel adds `1.0` to its expert's gate logit.
 pub const DEFAULT_SPIKE_BOOST: f32 = 1.0;
 
+/// Largest channel count the SNN boundary accepts.
+///
+/// `channels` is backend-controlled, and the encoder, decoder, spike
+/// validation and `SpikingMoeRouter` all allocate `channels`-sized buffers
+/// per tick. Without a bound, a backend reporting `usize::MAX` is a
+/// capacity-overflow panic or an allocator abort. 1 Mi channels keeps the
+/// largest per-tick buffers at 4 MiB of `f32`.
+pub const MAX_SNN_CHANNELS: usize = 1 << 20;
+
+/// Reject a backend-reported channel count above [`MAX_SNN_CHANNELS`] before
+/// any `channels`-sized buffer is allocated.
+fn check_snn_channels(channels: usize) -> Result<()> {
+    if channels > MAX_SNN_CHANNELS {
+        return Err(CortexError::InvalidConfig(format!(
+            "SNN channel count {channels} exceeds MAX_SNN_CHANNELS ({MAX_SNN_CHANNELS})"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate one backend tick against the [`SnnStepOutput`] contract.
 fn validate_spikes(step_out: &SnnStepOutput, channels: usize) -> Result<()> {
+    check_snn_channels(channels)?;
     let mut seen = vec![false; channels];
     for &channel in &step_out.spikes {
         if channel >= channels {
@@ -317,6 +342,7 @@ where
     /// encoded/decoded at channel *i*, so `channels < num_experts` would
     /// silently leave trailing experts permanently ANN-only.
     pub fn new(router: MoeRouter, backend: B, encoder: E, decoder: D) -> Result<Self> {
+        check_snn_channels(backend.channels())?;
         if backend.channels() < router.num_experts() {
             return Err(CortexError::SnnChannelMismatch {
                 experts: router.num_experts(),
@@ -365,6 +391,7 @@ where
         // Re-check it before the tick so `decoded[expert_id]` below cannot
         // index past the readout, and fail closed without consuming a step.
         let channels = self.backend.channels();
+        check_snn_channels(channels)?;
         if channels < num_experts {
             return Err(CortexError::SnnChannelMismatch {
                 experts: num_experts,
@@ -397,6 +424,7 @@ where
         // backend that shrank below the expert count during the step is
         // rejected here rather than indexed past below.
         let channels = self.backend.channels();
+        check_snn_channels(channels)?;
         if channels < num_experts {
             return Err(CortexError::SnnChannelMismatch {
                 experts: num_experts,
@@ -404,7 +432,7 @@ where
             });
         }
         validate_spikes(&step_out, channels)?;
-        let decoded = self.decoder.decode(&step_out, channels);
+        let decoded = self.decoder.decode(&step_out, channels)?;
         validate_readout(&decoded, channels)?;
 
         // Additive boost: monotone in activity for any logit sign (issue #93).
