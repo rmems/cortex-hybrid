@@ -126,6 +126,85 @@ fn oversized_channel_counts_are_invalid_config_not_panics() {
     ));
 }
 
+/// Backend whose reported width jumps to `usize::MAX` on the
+/// `huge_from_call`-th `channels()` invocation, modelling a backend that
+/// grows between the router's construction, pre-step and post-step reads.
+struct GrowingBackend {
+    inner: MockBackend,
+    calls: std::cell::Cell<usize>,
+    huge_from_call: usize,
+}
+
+impl SnnBackend for GrowingBackend {
+    fn channels(&self) -> usize {
+        let n = self.calls.get();
+        self.calls.set(n + 1);
+        if n >= self.huge_from_call {
+            usize::MAX
+        } else {
+            self.inner.channels()
+        }
+    }
+
+    fn step(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
+        self.inner.step(stimulus)
+    }
+
+    fn step_frozen(&mut self, stimulus: &[f32]) -> Result<SnnStepOutput> {
+        self.inner.step_frozen(stimulus)
+    }
+
+    fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    fn capabilities(&self) -> SnnCapabilities {
+        self.inner.capabilities()
+    }
+}
+
+#[test]
+fn backend_channel_growth_is_rejected_before_and_after_the_tick() {
+    let router = || MoeRouter::load_with_mode("", 8, 1, crate::moe::RoutingMode::DenseSim).unwrap();
+    let growing = |huge_from_call| GrowingBackend {
+        inner: MockBackend::new(8, 0.0),
+        calls: std::cell::Cell::new(0),
+        huge_from_call,
+    };
+
+    // channels() call order per forward: new() reads it twice (cap check,
+    // then the expert-count check), then pre-step, then post-step — so
+    // call indices 0-1 are construction, 2 is pre-step, 3 is post-step.
+    // Growth visible at the pre-step read: the tick never runs.
+    let mut model = SpikingMoeRouter::new(
+        router(),
+        growing(2),
+        RateEncoder::default(),
+        SpikeCountDecoder,
+    )
+    .unwrap();
+    assert!(matches!(
+        model.forward(&[1.0; EMBEDDING_DIM]),
+        Err(HybridError::InvalidConfig(_))
+    ));
+    assert_eq!(model.backend().inner.steps, 0);
+
+    // Growth only visible after the step: the tick is consumed, then the
+    // post-step width check rejects before spike validation allocates.
+    let mut model = SpikingMoeRouter::new(
+        router(),
+        growing(3),
+        RateEncoder::default(),
+        SpikeCountDecoder,
+    )
+    .unwrap();
+    assert!(matches!(
+        model.forward(&[1.0; EMBEDDING_DIM]),
+        Err(HybridError::InvalidConfig(_))
+    ));
+    assert_eq!(model.backend().inner.steps, 1);
+}
+
 #[test]
 fn spiking_forward_routes_and_steps_backend() {
     let backend = MockBackend::new(8, 0.0);
