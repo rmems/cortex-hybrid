@@ -1146,31 +1146,25 @@ fn run_gated_mlp(
 }
 
 fn run_add(stage_id: &StageId, inputs: &[StageInput<'_, CandleTensor>]) -> Result<CandleTensor> {
-    if inputs.is_empty() {
-        return Err(CortexError::StageInputArity {
-            stage_id: stage_id.to_string(),
-            expected: 1,
-            got: 0,
-        });
+    // Residual connections are strictly binary, matching the reference
+    // executor's `StageKind::Add` semantics.
+    expect_arity(stage_id, inputs, 2)?;
+    let lhs = tensor_arg(stage_id, inputs, 0)?;
+    let rhs = tensor_arg(stage_id, inputs, 1)?;
+    if lhs.inner.dims() != rhs.inner.dims() {
+        return Err(stage_failed(
+            stage_id,
+            CortexError::ShapeMismatch {
+                expected: lhs.inner.dims().to_vec(),
+                got: rhs.inner.dims().to_vec(),
+            },
+        ));
     }
-    let first = tensor_arg(stage_id, inputs, 0)?;
-    let mut acc = first.inner.clone();
-    for index in 1..inputs.len() {
-        let rhs = tensor_arg(stage_id, inputs, index)?;
-        if acc.dims() != rhs.inner.dims() {
-            return Err(stage_failed(
-                stage_id,
-                CortexError::ShapeMismatch {
-                    expected: acc.dims().to_vec(),
-                    got: rhs.inner.dims().to_vec(),
-                },
-            ));
-        }
-        acc = acc
-            .add(&rhs.inner)
-            .map_err(|err| fail_candle(stage_id, err))?;
-    }
-    finish(stage_id, acc)
+    let out = lhs
+        .inner
+        .add(&rhs.inner)
+        .map_err(|err| fail_candle(stage_id, err))?;
+    finish(stage_id, out)
 }
 
 #[cfg(test)]

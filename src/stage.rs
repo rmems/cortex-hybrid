@@ -168,7 +168,8 @@ pub enum StageKind {
         /// Index of this expert within its router.
         expert_index: usize,
     },
-    /// Elementwise addition (e.g. a residual connection).
+    /// Elementwise addition of exactly two inputs (e.g. a residual
+    /// connection). Any other arity is [`CortexError::StageInputArity`].
     Add,
     /// Final projection to logits / outputs.
     Readout,
@@ -671,7 +672,10 @@ pub trait AnnExecutor {
     ///
     /// Returns a [`CortexError`] on unsupported kinds, input arity/kind/dtype
     /// mismatches, or an internal failure. On error, executor state is
-    /// unchanged.
+    /// unchanged. [`run_topology`] returns an error that already carries stage
+    /// context (a `stage_id`-bearing variant or [`CortexError::StageFailed`])
+    /// unchanged and wraps any other error in [`CortexError::StageFailed`]
+    /// naming the stage.
     fn execute(
         &mut self,
         stage: &AnnStage,
@@ -829,29 +833,111 @@ fn binding_kind<T>(binding: &Binding<'_, T>) -> &'static str {
 /// against the executor's [`AnnCapabilities::supported_dtypes`] and the output
 /// is stored under its stage id. Bound stage outputs are inputs, not outputs,
 /// and do not appear in the returned map. The first error encountered stops
-/// the run. Every binding the topology needs — each [`StageSource::External`]
-/// name and each declared external stage dependency — is checked **before the
-/// first [`AnnExecutor::execute`]**, so a missing binding on a later stage
-/// never leaves a stateful executor half-advanced.
+/// the run.
+///
+/// Preflight fails closed **before the first [`AnnExecutor::execute`]**, so a
+/// topology rejected in the checks below never leaves a stateful executor
+/// half-advanced. After preflight succeeds, a later `execute` failure stops
+/// the run at that stage; earlier stages have already been applied and are
+/// not rolled back.
+///
+/// * every stage kind must be advertised in
+///   [`AnnCapabilities::supported_tags`] (this uses [`StageKind::tag`]; every
+///   [`StageKind::Custom`] name shares [`StageKindTag::Custom`]);
+/// * every [`StageSource::External`] name and declared external stage
+///   dependency must be bound; and
+/// * every bound ingress tensor must report a [`DType`] in
+///   [`AnnCapabilities::supported_dtypes`].
 ///
 /// # Errors
 ///
+/// Preflight (no stage executes when any of these fail):
+///
+/// * [`CortexError::UnsupportedStage`] for the first stage whose kind is not
+///   in [`AnnCapabilities::supported_tags`].
 /// * [`CortexError::MissingStageBinding`] when a referenced external ingress,
-///   or a declared external stage dependency, has no binding.
+///   or a declared external stage dependency, has no binding; `stage_id` names
+///   the stage that needed it.
 /// * [`CortexError::ConflictingStageBinding`] when a bound stage output names
 ///   a stage the topology itself produces (it would shadow that stage).
+/// * [`CortexError::StageDTypeMismatch`] when a bound ingress tensor reports a
+///   dtype outside [`AnnCapabilities::supported_dtypes`]; `stage_id` names the
+///   consuming stage.
+///
+/// During the run:
+///
 /// * [`CortexError::InvalidTopology`] when a stage input references an output
 ///   that is unexpectedly absent (should not occur for a validated topology).
-/// * [`CortexError::StageDTypeMismatch`] when an output dtype is unsupported.
-/// * Any error returned by [`AnnExecutor::execute`], unchanged.
+/// * [`CortexError::StageDTypeMismatch`] when a produced output's dtype is
+///   unsupported.
+/// * [`CortexError::StageFailed`] wrapping any [`AnnExecutor::execute`] error
+///   that does not already carry stage context; stage-scoped executor errors
+///   pass through unchanged.
 pub fn run_topology<E: AnnExecutor>(
     executor: &mut E,
     topology: &AnnTopology,
     bindings: &ExternalBindings<E::Tensor>,
 ) -> Result<BTreeMap<StageId, E::Tensor>> {
-    check_bindings(topology, bindings)?;
+    run_topology_driver(executor, topology, bindings, None)
+}
 
-    let supported_dtypes = executor.capabilities().supported_dtypes;
+/// Like [`run_topology`], but the returned map holds only the outputs of the
+/// stages listed in `retain`.
+///
+/// Every stage still executes — intermediates feed downstream stages whether
+/// or not they are retained — so `retain` selects the egress set a caller gets
+/// back rather than skipping work. Intermediates remain in memory until the
+/// run finishes; `retain` only filters the returned map. Each id in `retain` must name a stage the
+/// topology produces; a bound external stage dependency is an input, not a
+/// produced output, and cannot be retained.
+///
+/// # Errors
+///
+/// Same as [`run_topology`], plus [`CortexError::InvalidTopology`] — reported
+/// before anything executes — when `retain` names an id the topology does not
+/// produce.
+pub fn run_topology_with_egress<E: AnnExecutor>(
+    executor: &mut E,
+    topology: &AnnTopology,
+    bindings: &ExternalBindings<E::Tensor>,
+    retain: &[StageId],
+) -> Result<BTreeMap<StageId, E::Tensor>> {
+    run_topology_driver(executor, topology, bindings, Some(retain))
+}
+
+/// Shared driver for [`run_topology`] and [`run_topology_with_egress`].
+fn run_topology_driver<E: AnnExecutor>(
+    executor: &mut E,
+    topology: &AnnTopology,
+    bindings: &ExternalBindings<E::Tensor>,
+    retain: Option<&[StageId]>,
+) -> Result<BTreeMap<StageId, E::Tensor>> {
+    let caps = executor.capabilities();
+
+    // Capability pre-check: an unsupported stage fails the run before any
+    // earlier stage executes.
+    if let Some(stage) = topology
+        .stages()
+        .iter()
+        .find(|stage| !caps.supports(&stage.kind))
+    {
+        return Err(CortexError::UnsupportedStage {
+            backend: caps.backend_name,
+            stage_id: stage.id.to_string(),
+            kind: format!("{:?}", stage.kind),
+        });
+    }
+
+    check_bindings(topology, bindings, &caps.supported_dtypes)?;
+
+    if let Some(retain) = retain
+        && let Some(unproduced) = retain.iter().find(|id| topology.stage_by_id(id).is_none())
+    {
+        return Err(CortexError::InvalidTopology {
+            reason: format!("retained egress '{unproduced}' is not a stage in the topology"),
+        });
+    }
+
     let mut outputs: BTreeMap<StageId, E::Tensor> = BTreeMap::new();
 
     for stage in topology.stages() {
@@ -859,9 +945,13 @@ pub fn run_topology<E: AnnExecutor>(
         for source in &stage.inputs {
             match source {
                 StageSource::External(name) => {
-                    let resolved = bindings
-                        .resolve(name)
-                        .ok_or_else(|| CortexError::MissingStageBinding { name: name.clone() })?;
+                    let resolved =
+                        bindings
+                            .resolve(name)
+                            .ok_or_else(|| CortexError::MissingStageBinding {
+                                stage_id: stage.id.to_string(),
+                                name: name.clone(),
+                            })?;
                     inputs.push(resolved);
                 }
                 StageSource::Stage(dep) => {
@@ -870,6 +960,7 @@ pub fn run_topology<E: AnnExecutor>(
                         None if topology.external_stage_deps().contains(dep) => bindings
                             .stage_output(dep)
                             .ok_or_else(|| CortexError::MissingStageBinding {
+                                stage_id: stage.id.to_string(),
                                 name: dep.to_string(),
                             })?,
                         None => {
@@ -886,39 +977,126 @@ pub fn run_topology<E: AnnExecutor>(
             }
         }
 
-        let output = executor.execute(stage, &inputs)?;
+        let output = executor
+            .execute(stage, &inputs)
+            .map_err(|err| scope_to_stage(&stage.id, err))?;
         let dtype = output.meta().dtype;
-        if !supported_dtypes.contains(&dtype) {
-            let expected = supported_dtypes
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
+        if !caps.supported_dtypes.contains(&dtype) {
             return Err(CortexError::StageDTypeMismatch {
                 stage_id: stage.id.to_string(),
-                expected,
+                expected: supported_dtype_list(&caps.supported_dtypes),
                 got: dtype.to_string(),
             });
         }
         outputs.insert(stage.id.clone(), output);
     }
 
+    if let Some(retain) = retain {
+        let keep: BTreeSet<&StageId> = retain.iter().collect();
+        outputs.retain(|id, _| keep.contains(id));
+    }
+
     Ok(outputs)
+}
+
+/// Whether `err` already names the stage that produced it. Errors without
+/// stage context are wrapped by the composition driver so a third-party
+/// executor failure still reports which stage failed.
+fn is_stage_scoped(err: &CortexError) -> bool {
+    match err {
+        CortexError::UnsupportedStage { .. }
+        | CortexError::MissingStageParams { .. }
+        | CortexError::StageParamsMismatch { .. }
+        | CortexError::InvalidStageParams { .. }
+        | CortexError::StageInputArity { .. }
+        | CortexError::StageInputKind { .. }
+        | CortexError::StageDTypeMismatch { .. }
+        | CortexError::MissingStageBinding { .. }
+        | CortexError::StageFailed { .. } => true,
+        CortexError::UnsupportedOperation { stage_id, .. } => stage_id.is_some(),
+        _ => false,
+    }
+}
+
+/// Tag an [`AnnExecutor::execute`] error with the stage that produced it:
+/// errors that already carry stage context pass through unchanged, anything
+/// else is wrapped in [`CortexError::StageFailed`].
+fn scope_to_stage(stage_id: &StageId, err: CortexError) -> CortexError {
+    if is_stage_scoped(&err) {
+        return err;
+    }
+    CortexError::StageFailed {
+        stage_id: stage_id.to_string(),
+        source: Box::new(err),
+    }
+}
+
+/// The `expected` list for a [`CortexError::StageDTypeMismatch`].
+fn supported_dtype_list(supported_dtypes: &BTreeSet<DType>) -> String {
+    supported_dtypes
+        .iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Reject an ingress tensor whose dtype the executor does not support, naming
+/// the stage that consumes it.
+fn check_ingress_dtype<T: StageTensor>(
+    stage_id: &StageId,
+    tensor: &T,
+    supported_dtypes: &BTreeSet<DType>,
+) -> Result<()> {
+    let dtype = tensor.meta().dtype;
+    if supported_dtypes.contains(&dtype) {
+        return Ok(());
+    }
+    Err(CortexError::StageDTypeMismatch {
+        stage_id: stage_id.to_string(),
+        expected: supported_dtype_list(supported_dtypes),
+        got: dtype.to_string(),
+    })
+}
+
+/// The stage that consumes external dependency `dep`. A validated topology
+/// always has at least one (`dep` is declared only when referenced); the
+/// fallback is defensive.
+fn needing_stage_id<'t>(topology: &'t AnnTopology, dep: &'t StageId) -> &'t StageId {
+    topology
+        .stages()
+        .iter()
+        .find(|stage| {
+            stage
+                .inputs
+                .iter()
+                .any(|source| matches!(source, StageSource::Stage(id) if id == dep))
+        })
+        .map(|stage| &stage.id)
+        .unwrap_or(dep)
 }
 
 /// Fail closed on bindings before anything runs: every declared external stage
 /// dependency and every referenced [`StageSource::External`] name needs a
-/// binding, and no bound stage output may shadow a stage the topology produces.
+/// binding, bound tensors must report a dtype the executor supports, and no
+/// bound stage output may shadow a stage the topology produces.
 ///
 /// External names are checked in topology order, so the reported missing name
 /// is the first one the run would have needed.
-fn check_bindings<T>(topology: &AnnTopology, bindings: &ExternalBindings<T>) -> Result<()> {
+fn check_bindings<T: StageTensor>(
+    topology: &AnnTopology,
+    bindings: &ExternalBindings<T>,
+    supported_dtypes: &BTreeSet<DType>,
+) -> Result<()> {
     for dep in topology.external_stage_deps() {
-        if bindings.stage_output(dep).is_none() {
-            return Err(CortexError::MissingStageBinding {
-                name: dep.to_string(),
-            });
-        }
+        let stage_id = needing_stage_id(topology, dep);
+        let tensor =
+            bindings
+                .stage_output(dep)
+                .ok_or_else(|| CortexError::MissingStageBinding {
+                    stage_id: stage_id.to_string(),
+                    name: dep.to_string(),
+                })?;
+        check_ingress_dtype(stage_id, tensor, supported_dtypes)?;
     }
     for stage in topology.stages() {
         if bindings.stage_output(&stage.id).is_some() {
@@ -929,10 +1107,18 @@ fn check_bindings<T>(topology: &AnnTopology, bindings: &ExternalBindings<T>) -> 
             });
         }
         for source in &stage.inputs {
-            if let StageSource::External(name) = source
-                && bindings.resolve(name).is_none()
-            {
-                return Err(CortexError::MissingStageBinding { name: name.clone() });
+            let StageSource::External(name) = source else {
+                continue;
+            };
+            let resolved =
+                bindings
+                    .resolve(name)
+                    .ok_or_else(|| CortexError::MissingStageBinding {
+                        stage_id: stage.id.to_string(),
+                        name: name.clone(),
+                    })?;
+            if let StageInput::Tensor(tensor) = resolved {
+                check_ingress_dtype(&stage.id, tensor, supported_dtypes)?;
             }
         }
     }
@@ -1526,24 +1712,13 @@ impl<'p> AnnExecutor for ReferenceExecutor<'p> {
                 try_matmul(x, lm_head).map_err(|err| Self::wrap_failure(stage_id, err))
             }
             (StageKind::Add, _) => {
-                if inputs.is_empty() {
-                    return Err(CortexError::StageInputArity {
-                        stage_id: stage_id.to_string(),
-                        expected: 1,
-                        got: 0,
-                    });
-                }
-                // Left-fold with try_add so residual1 = r0 + attn and
-                // residual2 = r1 + mlp preserve operand order.
-                let first = Self::tensor_arg(stage_id, inputs, 0)?;
-                let mut acc = first.clone();
-                for index in 1..inputs.len() {
-                    let rhs = Self::tensor_arg(stage_id, inputs, index)?;
-                    acc = acc
-                        .try_add(rhs)
-                        .map_err(|err| Self::wrap_failure(stage_id, err))?;
-                }
-                Ok(acc)
+                // Residual connections are strictly binary: residual1 = r0 +
+                // attn and residual2 = r1 + mlp each take exactly two inputs.
+                Self::expect_arity(stage_id, inputs, 2)?;
+                let lhs = Self::tensor_arg(stage_id, inputs, 0)?;
+                let rhs = Self::tensor_arg(stage_id, inputs, 1)?;
+                lhs.try_add(rhs)
+                    .map_err(|err| Self::wrap_failure(stage_id, err))
             }
             // Unsupported kinds were rejected above, and the tag check makes
             // a kind/params disagreement unreachable here.
@@ -2144,25 +2319,48 @@ mod tests {
     }
 
     #[test]
-    fn add_stage_rejects_empty_inputs_and_shape_mismatch() {
+    fn add_stage_rejects_wrong_arity_and_shape_mismatch() {
         let mut exec = ReferenceExecutor::new();
         let descriptor = stage("sum", StageKind::Add, vec![]);
-        let err = exec.execute(&descriptor, &[]).unwrap_err();
-        assert!(matches!(
-            err,
-            CortexError::StageInputArity {
-                stage_id,
-                expected: 1,
-                got: 0,
-            } if stage_id == "sum"
-        ));
 
-        let a = Tensor::try_from_vec(vec![1.0; 8], &[1, 8]).unwrap();
+        // Add is strictly binary: zero, one, and three inputs all report
+        // `expected: 2`.
+        let a = Tensor::try_from_vec(vec![1.0; 4], &[1, 4]).unwrap();
         let b = Tensor::try_from_vec(vec![2.0; 4], &[1, 4]).unwrap();
+        let c = Tensor::try_from_vec(vec![4.0; 4], &[1, 4]).unwrap();
+        for inputs in [
+            Vec::new(),
+            vec![StageInput::Tensor(&a)],
+            vec![
+                StageInput::Tensor(&a),
+                StageInput::Tensor(&b),
+                StageInput::Tensor(&c),
+            ],
+        ] {
+            let n = inputs.len();
+            let err = exec.execute(&descriptor, &inputs).unwrap_err();
+            match err {
+                CortexError::StageInputArity {
+                    stage_id,
+                    expected,
+                    got,
+                } => {
+                    assert_eq!(stage_id, "sum");
+                    assert_eq!(expected, 2);
+                    assert_eq!(got, n);
+                }
+                other => panic!("expected StageInputArity for {n} inputs, got {other:?}"),
+            }
+        }
+
+        // Two tensors with mismatched shapes still reach the kernel, whose
+        // error is wrapped as StageFailed.
+        let wide = Tensor::try_from_vec(vec![1.0; 8], &[1, 8]).unwrap();
+        let narrow = Tensor::try_from_vec(vec![2.0; 4], &[1, 4]).unwrap();
         let err = exec
             .execute(
                 &descriptor,
-                &[StageInput::Tensor(&a), StageInput::Tensor(&b)],
+                &[StageInput::Tensor(&wide), StageInput::Tensor(&narrow)],
             )
             .unwrap_err();
         match err {
@@ -2175,23 +2373,18 @@ mod tests {
     }
 
     #[test]
-    fn add_stage_left_folds_three_operands() {
+    fn add_stage_adds_two_operands() {
         let mut exec = ReferenceExecutor::new();
         let descriptor = stage("sum", StageKind::Add, vec![]);
         let a = Tensor::try_from_vec(vec![1.0; 4], &[1, 4]).unwrap();
         let b = Tensor::try_from_vec(vec![2.0; 4], &[1, 4]).unwrap();
-        let c = Tensor::try_from_vec(vec![4.0; 4], &[1, 4]).unwrap();
         let out = exec
             .execute(
                 &descriptor,
-                &[
-                    StageInput::Tensor(&a),
-                    StageInput::Tensor(&b),
-                    StageInput::Tensor(&c),
-                ],
+                &[StageInput::Tensor(&a), StageInput::Tensor(&b)],
             )
             .unwrap();
-        assert_eq!(out.data(), &[7.0; 4]);
+        assert_eq!(out.data(), &[3.0; 4]);
     }
 
     /// Wraps an `f32` reference tensor but reports another dtype in [`StageTensor::meta`].
@@ -2343,7 +2536,8 @@ mod tests {
         let err = run_topology(&mut exec, &topo, &bindings).unwrap_err();
         assert!(matches!(
             err,
-            CortexError::MissingStageBinding { name } if name == "tokens"
+            CortexError::MissingStageBinding { stage_id, name }
+                if stage_id == "embedding" && name == "tokens"
         ));
     }
 
@@ -2411,10 +2605,12 @@ mod tests {
         let dep = StageId::new("blocks.1.residual2").unwrap();
         assert_eq!(span.external_stage_deps(), std::slice::from_ref(&dep));
 
-        // Nothing bound for the declared dep: MissingStageBinding names it.
+        // Nothing bound for the declared dep: MissingStageBinding names it and
+        // the stage that needed it.
         let err = run_topology(&mut exec, &span, &ExternalBindings::new()).unwrap_err();
         assert!(
-            matches!(err, CortexError::MissingStageBinding { ref name } if name == "blocks.1.residual2"),
+            matches!(err, CortexError::MissingStageBinding { ref stage_id, ref name }
+                if stage_id == "final_norm" && name == "blocks.1.residual2"),
             "got {err:?}"
         );
 
@@ -2467,7 +2663,10 @@ mod tests {
             stage(
                 "scale",
                 StageKind::Add,
-                vec![StageSource::External("hidden".to_string())],
+                vec![
+                    StageSource::External("hidden".to_string()),
+                    StageSource::External("hidden".to_string()),
+                ],
             ),
             stage(
                 "masked",
@@ -2490,7 +2689,8 @@ mod tests {
             .unwrap();
         let err = run_topology(&mut exec, &topo, &partial).unwrap_err();
         assert!(
-            matches!(err, CortexError::MissingStageBinding { ref name } if name == "mask"),
+            matches!(err, CortexError::MissingStageBinding { ref stage_id, ref name }
+                if stage_id == "masked" && name == "mask"),
             "got {err:?}"
         );
         assert_eq!(
@@ -2506,7 +2706,277 @@ mod tests {
             .unwrap();
         let out = run_topology(&mut exec, &topo, &full).unwrap();
         assert_eq!(exec.executes, 2);
-        assert_eq!(out[&StageId::new("masked").unwrap()].data(), &[1.5; 8]);
+        // scale = hidden + hidden = 2.0; masked = scale + mask = 2.5.
+        assert_eq!(out[&StageId::new("masked").unwrap()].data(), &[2.5; 8]);
+    }
+
+    #[test]
+    fn run_topology_rejects_unsupported_stage_before_any_execute() {
+        // Stage 2's kind is not advertised by the executor's capabilities; the
+        // run must fail before stage 1 executes, not after earlier stages ran.
+        let hidden = Tensor::try_from_vec(vec![1.0; 8], &[1, 8]).unwrap();
+        let topo = AnnTopology::new(vec![
+            stage(
+                "supported",
+                StageKind::Add,
+                vec![
+                    StageSource::External("hidden".to_string()),
+                    StageSource::External("hidden".to_string()),
+                ],
+            ),
+            stage(
+                "router",
+                StageKind::MoeRouter {
+                    num_experts: 2,
+                    top_k: 1,
+                },
+                vec![StageSource::Stage(StageId::new("supported").unwrap())],
+            ),
+        ])
+        .unwrap();
+        let bindings = ExternalBindings::new()
+            .with_tensor("hidden", &hidden)
+            .unwrap();
+        let mut reference = ReferenceExecutor::new();
+        let mut exec = CountingExecutor {
+            inner: &mut reference,
+            executes: 0,
+        };
+        let err = run_topology(&mut exec, &topo, &bindings).unwrap_err();
+        match err {
+            CortexError::UnsupportedStage {
+                backend,
+                stage_id,
+                kind,
+            } => {
+                assert_eq!(backend, "reference");
+                assert_eq!(stage_id, "router");
+                assert!(kind.contains("MoeRouter"), "kind carried: {kind}");
+            }
+            other => panic!("expected UnsupportedStage, got {other:?}"),
+        }
+        assert_eq!(
+            exec.executes, 0,
+            "no stage may execute before the capability pre-check passes"
+        );
+    }
+
+    #[test]
+    fn run_topology_rejects_unsupported_ingress_dtype_before_any_execute() {
+        // A bound tensor reporting a dtype outside `supported_dtypes` is
+        // rejected in preflight, naming the consuming stage.
+        let hidden = MisreportedDTypeTensor {
+            inner: Tensor::try_from_vec(vec![1.0; 4], &[1, 4]).unwrap(),
+            reported: DType::BF16,
+        };
+        let right = MisreportedDTypeTensor {
+            inner: Tensor::try_from_vec(vec![2.0; 4], &[1, 4]).unwrap(),
+            reported: DType::F32,
+        };
+        let topo = AnnTopology::new(vec![stage(
+            "sum",
+            StageKind::Add,
+            vec![
+                StageSource::External("hidden".to_string()),
+                StageSource::External("right".to_string()),
+            ],
+        )])
+        .unwrap();
+        let bindings = ExternalBindings::new()
+            .with_tensor("hidden", &hidden)
+            .unwrap()
+            .with_tensor("right", &right)
+            .unwrap();
+        let mut misreporting = MisreportingExecutor;
+        let mut exec = CountingExecutor {
+            inner: &mut misreporting,
+            executes: 0,
+        };
+        let err = run_topology(&mut exec, &topo, &bindings).unwrap_err();
+        match err {
+            CortexError::StageDTypeMismatch {
+                stage_id,
+                expected,
+                got,
+            } => {
+                assert_eq!(stage_id, "sum");
+                assert_eq!(expected, "f32");
+                assert_eq!(got, "bf16");
+            }
+            other => panic!("expected StageDTypeMismatch, got {other:?}"),
+        }
+        assert_eq!(
+            exec.executes, 0,
+            "no stage may execute before ingress dtypes are checked"
+        );
+    }
+
+    #[test]
+    fn run_topology_rejects_unsupported_bound_stage_output_dtype() {
+        // The same ingress dtype check applies to tensors bound for declared
+        // external stage dependencies.
+        let dep = StageId::new("prior").unwrap();
+        let injected = MisreportedDTypeTensor {
+            inner: Tensor::try_from_vec(vec![1.0; 4], &[1, 4]).unwrap(),
+            reported: DType::F16,
+        };
+        let right = MisreportedDTypeTensor {
+            inner: Tensor::try_from_vec(vec![2.0; 4], &[1, 4]).unwrap(),
+            reported: DType::F32,
+        };
+        let topo = AnnTopology::with_external_stage_deps(
+            vec![stage(
+                "sum",
+                StageKind::Add,
+                vec![
+                    StageSource::Stage(dep.clone()),
+                    StageSource::External("right".to_string()),
+                ],
+            )],
+            vec![dep.clone()],
+        )
+        .unwrap();
+        let bindings = ExternalBindings::new()
+            .with_stage_output(dep, &injected)
+            .unwrap()
+            .with_tensor("right", &right)
+            .unwrap();
+        let mut exec = MisreportingExecutor;
+        let err = run_topology(&mut exec, &topo, &bindings).unwrap_err();
+        match err {
+            CortexError::StageDTypeMismatch {
+                stage_id,
+                expected,
+                got,
+            } => {
+                assert_eq!(stage_id, "sum");
+                assert_eq!(expected, "f32");
+                assert_eq!(got, "f16");
+            }
+            other => panic!("expected StageDTypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// Executor that fails with a bare kernel error carrying no stage context.
+    struct BareErrorExecutor;
+
+    impl AnnExecutor for BareErrorExecutor {
+        type Tensor = Tensor;
+
+        fn capabilities(&self) -> AnnCapabilities {
+            AnnCapabilities {
+                backend_name: "bare",
+                supported_tags: BTreeSet::from([StageKindTag::Add]),
+                supported_dtypes: BTreeSet::from([DType::F32]),
+                stateful: false,
+            }
+        }
+
+        fn execute(
+            &mut self,
+            _stage: &AnnStage,
+            _inputs: &[StageInput<Self::Tensor>],
+        ) -> Result<Self::Tensor> {
+            Err(CortexError::ShapeMismatch {
+                expected: vec![1, 4],
+                got: vec![1, 2],
+            })
+        }
+    }
+
+    #[test]
+    fn run_topology_wraps_executor_errors_without_stage_context() {
+        // A third-party executor returning a bare kernel error must surface it
+        // as StageFailed naming the stage, like the reference executor's own
+        // wrapping.
+        let a = Tensor::try_from_vec(vec![1.0; 4], &[1, 4]).unwrap();
+        let b = Tensor::try_from_vec(vec![2.0; 4], &[1, 4]).unwrap();
+        let topo = AnnTopology::new(vec![stage(
+            "sum",
+            StageKind::Add,
+            vec![
+                StageSource::External("a".to_string()),
+                StageSource::External("b".to_string()),
+            ],
+        )])
+        .unwrap();
+        let bindings = ExternalBindings::new()
+            .with_tensor("a", &a)
+            .unwrap()
+            .with_tensor("b", &b)
+            .unwrap();
+        let mut exec = BareErrorExecutor;
+        let err = run_topology(&mut exec, &topo, &bindings).unwrap_err();
+        match err {
+            CortexError::StageFailed { stage_id, source } => {
+                assert_eq!(stage_id, "sum");
+                assert!(matches!(*source, CortexError::ShapeMismatch { .. }));
+            }
+            other => panic!("expected StageFailed wrapping ShapeMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_topology_passes_stage_scoped_executor_errors_through() {
+        // An executor error that already carries stage context is returned
+        // unchanged rather than re-wrapped in StageFailed.
+        let topo = AnnTopology::new(vec![stage("sum", StageKind::Add, vec![])]).unwrap();
+        let bindings: ExternalBindings<MisreportedDTypeTensor> = ExternalBindings::new();
+        let mut exec = MisreportingExecutor;
+        // MisreportingExecutor answers StageInputArity, which already names
+        // the stage; the driver must not wrap it again.
+        let err = run_topology(&mut exec, &topo, &bindings).unwrap_err();
+        match err {
+            CortexError::StageInputArity { stage_id, .. } => {
+                assert_eq!(stage_id, "sum");
+            }
+            other => panic!("expected StageInputArity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_topology_with_egress_retains_only_requested_outputs() {
+        let model = micro_model();
+        let (mut exec, topo) = ReferenceExecutor::from_transformer(&model).unwrap();
+        let ids = [1u32, 3, 0];
+        let bindings = ExternalBindings::new().with_tokens("tokens", &ids).unwrap();
+        let retain = [
+            StageId::new("blocks.0.residual2").unwrap(),
+            StageId::new("readout").unwrap(),
+        ];
+        let outputs = run_topology_with_egress(&mut exec, &topo, &bindings, &retain).unwrap();
+        assert_eq!(
+            outputs.keys().collect::<Vec<_>>(),
+            retain.iter().collect::<Vec<_>>(),
+            "only the retained egress set is returned"
+        );
+        let expected = model.try_forward(&ids).unwrap();
+        assert_eq!(
+            outputs[&StageId::new("readout").unwrap()].data(),
+            expected.data()
+        );
+    }
+
+    #[test]
+    fn run_topology_with_egress_rejects_unproduced_ids_before_any_execute() {
+        let model = micro_model();
+        let (mut inner, topo) = ReferenceExecutor::from_transformer(&model).unwrap();
+        let ids = [1u32, 3, 0];
+        let bindings = ExternalBindings::new().with_tokens("tokens", &ids).unwrap();
+        let retain = [
+            StageId::new("readout").unwrap(),
+            StageId::new("absent").unwrap(),
+        ];
+        let mut exec = CountingExecutor {
+            inner: &mut inner,
+            executes: 0,
+        };
+        let err = run_topology_with_egress(&mut exec, &topo, &bindings, &retain).unwrap_err();
+        assert!(
+            matches!(err, CortexError::InvalidTopology { ref reason } if reason.contains("'absent'")),
+            "got {err:?}"
+        );
+        assert_eq!(exec.executes, 0);
     }
 
     #[test]

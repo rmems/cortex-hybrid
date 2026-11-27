@@ -1,6 +1,6 @@
 [package]
 name = "cortex-hybrid"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 # MSRV for dependents: the verified floor, set by `engram-parser` 0.3.0
 # (1.97.1). `neuromod` needs 1.98.1 and `axon-encoder` needs 1.99.0. The development

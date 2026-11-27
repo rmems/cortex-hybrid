@@ -374,7 +374,8 @@ fn sub_span_with_two_external_stage_deps_runs_from_bound_outputs() {
         .expect("bind norm1");
     let err = run_topology(&mut exec, &span_topo, &partial).unwrap_err();
     assert!(
-        matches!(err, CortexError::MissingStageBinding { ref name } if name == "embedding"),
+        matches!(err, CortexError::MissingStageBinding { ref stage_id, ref name }
+            if stage_id == "blocks.0.residual1" && name == "embedding"),
         "got {err:?}"
     );
 
@@ -457,8 +458,9 @@ fn moe_stages_are_rejected_and_rejection_is_atomic() {
         other => panic!("expected UnsupportedStage, got {other:?}"),
     }
 
-    // A topology with a MoE stage AFTER a normalization stage: the driver runs
-    // the norm, then returns UnsupportedStage at the MoE stage.
+    // A topology with a MoE stage after a normalization stage: the driver's
+    // capability pre-check fails the run before any stage executes, naming the
+    // unsupported stage.
     let norm_id = id("norm");
     let moe_id = id("expert");
     let mut composed = ReferenceExecutor::new().bind(
@@ -489,10 +491,15 @@ fn moe_stages_are_rejected_and_rejection_is_atomic() {
     let bindings = ExternalBindings::new()
         .with_tensor("hidden", &hidden)
         .expect("bind hidden");
-    let err = run_topology(&mut composed, &moe_topo, &bindings).unwrap_err();
+    let mut rec = RecordingExecutor::new(&mut composed);
+    let err = run_topology(&mut rec, &moe_topo, &bindings).unwrap_err();
     assert!(
         matches!(err, CortexError::UnsupportedStage { ref stage_id, .. } if stage_id == "expert"),
         "driver should fail at the MoE stage, got {err:?}"
+    );
+    assert!(
+        rec.executed.is_empty(),
+        "capability pre-check must reject the run before any stage executes"
     );
 
     // Failure-atomicity: after the rejection, the SAME executor still runs the
