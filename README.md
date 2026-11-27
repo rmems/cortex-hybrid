@@ -137,10 +137,12 @@ by cross-crate parity tests in hybrid-fusion's `smoke/cortex-neuromod` package
 
 ```toml
 [dependencies]
-# 0.3.0 is not on crates.io yet (latest release is 0.2.0). Use git until it is published:
-cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", features = ["neuromod"] }
-# After the 0.3.0 crates.io release:
+# crates.io, once 0.3.0 is published:
 # cortex-hybrid = { version = "0.3", features = ["neuromod"] }
+# Unreleased main, after this change is merged:
+cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", features = ["neuromod"] }
+# This pull request, before merge:
+# cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", branch = "devin/issue-104-non-exhaustive", features = ["neuromod"] }
 ```
 
 ```rust
@@ -318,19 +320,22 @@ Q6_K token rows call `engram_parser::dequantize_q6_k`. That is the same live pat
 The package is `cortex-hybrid` and the library is `cortex_hybrid`,
 so imports are `use cortex_hybrid::…`.
 
-The in-tree package version is 0.3.0. That version is not yet on crates.io
-(latest release: 0.2.0). Until 0.3.0 is published, depend on git:
-
-```toml
-[dependencies]
-cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid" }
-```
-
-After the 0.3.0 crates.io release:
+From crates.io (0.3.0 and later):
 
 ```toml
 [dependencies]
 cortex-hybrid = "0.3"
+```
+
+If Cargo cannot resolve that version pin (for example when 0.3.0 has not
+been published yet), or you want unreleased commits, use git:
+
+```toml
+[dependencies]
+# unreleased main, after this change is merged
+cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid" }
+# this pull request, before merge
+# cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", branch = "devin/issue-104-non-exhaustive" }
 ```
 
 Features (all off by default):
