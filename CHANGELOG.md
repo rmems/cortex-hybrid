@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Packaging
 
-- Crate version set to 0.3.0 (unreleased) so `cargo semver-checks` against the `v0.2.0` baseline accepts the breaking `MissingStageBinding.stage_id` field addition required by #106.
+- Crate version set to 0.3.0 (unreleased) so `cargo semver-checks` against the `v0.2.0` baseline accepts the breaking `MissingStageBinding.stage_id` field addition required by #106 and the `#[non_exhaustive]` / constructor break required by #104.
 
 ### Added
 
@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `MissingStageBinding` gains a `stage_id` field naming the stage that needed the binding (for a declared external stage dependency, the first stage referencing it). Callers matching on the old single-field variant must update.
   - Errors returned by `AnnExecutor::execute` that do not already carry stage context are wrapped in `StageFailed { stage_id, .. }` instead of passing through unscoped; `stage_id`-bearing variants and `StageFailed` itself pass through unchanged.
   - `StageKind::Add` is now strictly binary: any arity other than two returns `StageInputArity { expected: 2, .. }` (previously `Add` left-folded any number of inputs and reported `expected: 1` on zero inputs). `CandleExecutor` enforces the same arity.
+- **Breaking (extensible API, RM-2092 / #104):** the public types that are expected to grow variants or fields are now `#[non_exhaustive]` — `CortexError`, `TensorMeta`, `AnnCapabilities`, `ReferenceStageParams`, `RoutingMode`, `StageSource`, `SubSpan`, and `StageInput`. Downstream exhaustive `match`es on the enums need a wildcard arm, and the structs can no longer be built with literals: use `TensorMeta::new(shape, dtype)` and `AnnCapabilities::new(backend_name, supported_tags, supported_dtypes)` (with `with_stateful` for stateful backends) instead. `SubSpan` has no public constructor; obtain one from `AnnTopology::sub_span`. `StageSource`, `StageInput`, and `ReferenceStageParams` variants remain constructible. Enum variants stay constructible and all fields stay readable.
+
 
 ## [0.2.0] - 2026-11-24
 

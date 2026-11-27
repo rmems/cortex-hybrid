@@ -64,6 +64,7 @@ impl ExtractTokenOptions {
 ///
 /// Serializes as the canonical slug wire form (`stub_uniform`, `dense_sim`);
 /// the legacy PascalCase names remain accepted on deserialize.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingMode {

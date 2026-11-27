@@ -137,7 +137,12 @@ by cross-crate parity tests in hybrid-fusion's `smoke/cortex-neuromod` package
 
 ```toml
 [dependencies]
-cortex-hybrid = { version = "0.2", features = ["neuromod"] }
+# crates.io, once 0.3.0 is published:
+# cortex-hybrid = { version = "0.3", features = ["neuromod"] }
+# Unreleased main, after this change is merged:
+cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", features = ["neuromod"] }
+# This pull request, before merge:
+# cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", branch = "devin/issue-104-non-exhaustive", features = ["neuromod"] }
 ```
 
 ```rust
@@ -315,9 +320,22 @@ Q6_K token rows call `engram_parser::dequantize_q6_k`. That is the same live pat
 The package is `cortex-hybrid` and the library is `cortex_hybrid`,
 so imports are `use cortex_hybrid::…`.
 
+From crates.io (0.3.x):
+
 ```toml
 [dependencies]
-cortex-hybrid = "0.2"
+cortex-hybrid = "0.3"
+```
+
+If Cargo cannot resolve that version pin (for example when 0.3.0 has not
+been published yet), or you want unreleased commits, use git:
+
+```toml
+[dependencies]
+# unreleased main, after this change is merged
+cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid" }
+# this pull request, before merge
+# cortex-hybrid = { git = "https://github.com/rmems/cortex-hybrid", branch = "devin/issue-104-non-exhaustive" }
 ```
 
 Features (all off by default):

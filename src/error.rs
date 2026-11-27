@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 
+#[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum CortexError {
     // ── Tensor / math errors ──────────────────────────────────────────────

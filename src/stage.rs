@@ -88,12 +88,24 @@ impl DType {
 ///
 /// This is metadata only: it never carries data, so an executor can report an
 /// output's shape and dtype without exposing its concrete storage.
+///
+/// `#[non_exhaustive]` so additional fields (a device field is deferred to
+/// RM-1827) can be added without a second breaking release. Construct with
+/// [`TensorMeta::new`]; fields stay readable.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorMeta {
     /// Row-major extents, outermost dimension first.
     pub shape: Vec<usize>,
     /// Element type.
     pub dtype: DType,
+}
+
+impl TensorMeta {
+    /// Shape + dtype metadata for `shape` (row-major extents) and `dtype`.
+    pub fn new(shape: Vec<usize>, dtype: DType) -> Self {
+        Self { shape, dtype }
+    }
 }
 
 /// A tensor an [`AnnExecutor`] can carry across the stage boundary.
@@ -107,10 +119,7 @@ pub trait StageTensor {
 
 impl StageTensor for crate::Tensor {
     fn meta(&self) -> TensorMeta {
-        TensorMeta {
-            shape: self.shape().to_vec(),
-            dtype: DType::F32,
-        }
+        TensorMeta::new(self.shape().to_vec(), DType::F32)
     }
 }
 
@@ -325,6 +334,7 @@ impl fmt::Display for StageId {
 }
 
 /// Where a stage input comes from.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StageSource {
     /// A named external ingress supplied at run time (e.g. `"tokens"`).
@@ -369,6 +379,7 @@ pub struct AnnTopology {
 /// names it references. [`SubSpan::to_topology`] turns the span into a
 /// runnable [`AnnTopology`] whose `external_stage_deps` must be satisfied with
 /// [`ExternalBindings::with_stage_output`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubSpan<'a> {
     /// The contiguous slice of stages, order preserved.
@@ -613,6 +624,11 @@ impl AnnTopology {
 }
 
 /// What a backend can execute, mirroring the `snn` module's capabilities style.
+///
+/// `#[non_exhaustive]` so additional fields (a device field is deferred to
+/// RM-1827) can be added without a second breaking release. Construct with
+/// [`AnnCapabilities::new`]; fields stay readable.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnnCapabilities {
     /// Human-readable backend identity, e.g. `"cortex::ReferenceExecutor"`.
@@ -626,6 +642,28 @@ pub struct AnnCapabilities {
 }
 
 impl AnnCapabilities {
+    /// A stateless backend report: `stateful` starts `false`; set it with
+    /// [`AnnCapabilities::with_stateful`].
+    pub fn new(
+        backend_name: &'static str,
+        supported_tags: BTreeSet<StageKindTag>,
+        supported_dtypes: BTreeSet<DType>,
+    ) -> Self {
+        Self {
+            backend_name,
+            supported_tags,
+            supported_dtypes,
+            stateful: false,
+        }
+    }
+
+    /// Mark whether `execute` mutates backend state across calls. Returns
+    /// `self` for chaining.
+    pub fn with_stateful(mut self, stateful: bool) -> Self {
+        self.stateful = stateful;
+        self
+    }
+
     /// Whether this backend can execute `kind` (by its [`StageKind::tag`]).
     pub fn supports(&self, kind: &StageKind) -> bool {
         self.supported_tags.contains(&kind.tag())
@@ -636,6 +674,7 @@ impl AnnCapabilities {
 ///
 /// Generic over the executor's tensor type so the contract never names a
 /// concrete tensor.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum StageInput<'a, T> {
     /// Token ids for an embedding ingress.
@@ -1135,6 +1174,10 @@ fn check_bindings<T: StageTensor>(
 /// `Debug` reports only each variant's shape-level metadata, not weights:
 /// [`MultiHeadAttention`] and [`FeedForward`] intentionally do not implement
 /// `Debug`, and dumping full weight tensors would be noise.
+///
+/// `#[non_exhaustive]` so gated-MLP and MoE parameter variants can be added
+/// without a second breaking release.
+#[non_exhaustive]
 #[derive(Clone)]
 pub enum ReferenceStageParams<'p> {
     /// Token + position embedding tables and the sequence-length cap.
@@ -1542,12 +1585,11 @@ impl<'p> ReferenceExecutor<'p> {
 
 impl<'p> ReferenceExecutor<'p> {
     fn ann_capabilities() -> AnnCapabilities {
-        AnnCapabilities {
-            backend_name: Self::BACKEND_NAME,
-            supported_tags: Self::supported_tags(),
-            supported_dtypes: BTreeSet::from([DType::F32]),
-            stateful: false,
-        }
+        AnnCapabilities::new(
+            Self::BACKEND_NAME,
+            Self::supported_tags(),
+            BTreeSet::from([DType::F32]),
+        )
     }
 
     /// Copy a reference tensor into the adapter interchange buffer.
@@ -1855,12 +1897,11 @@ mod tests {
 
     #[test]
     fn capabilities_supports_reports_expected_booleans() {
-        let caps = AnnCapabilities {
-            backend_name: "test",
-            supported_tags: BTreeSet::from([StageKindTag::Embedding, StageKindTag::DenseMlp]),
-            supported_dtypes: BTreeSet::from([DType::F32]),
-            stateful: false,
-        };
+        let caps = AnnCapabilities::new(
+            "test",
+            BTreeSet::from([StageKindTag::Embedding, StageKindTag::DenseMlp]),
+            BTreeSet::from([DType::F32]),
+        );
         assert!(caps.supports(&StageKind::Embedding));
         assert!(caps.supports(&StageKind::Mlp {
             kind: MlpKind::Dense
@@ -2396,10 +2437,7 @@ mod tests {
 
     impl StageTensor for MisreportedDTypeTensor {
         fn meta(&self) -> TensorMeta {
-            TensorMeta {
-                shape: self.inner.shape().to_vec(),
-                dtype: self.reported,
-            }
+            TensorMeta::new(self.inner.shape().to_vec(), self.reported)
         }
     }
 
@@ -2409,12 +2447,11 @@ mod tests {
         type Tensor = MisreportedDTypeTensor;
 
         fn capabilities(&self) -> AnnCapabilities {
-            AnnCapabilities {
-                backend_name: "misreport",
-                supported_tags: BTreeSet::from([StageKindTag::Add]),
-                supported_dtypes: BTreeSet::from([DType::F32]),
-                stateful: false,
-            }
+            AnnCapabilities::new(
+                "misreport",
+                BTreeSet::from([StageKindTag::Add]),
+                BTreeSet::from([DType::F32]),
+            )
         }
 
         fn execute(

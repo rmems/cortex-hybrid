@@ -268,12 +268,7 @@ fn probe_capabilities(
     limitations: BackendLimitations,
 ) -> cortex_hybrid::stage::AdapterCapabilities {
     cortex_hybrid::stage::AdapterCapabilities {
-        ann: AnnCapabilities {
-            backend_name: "probe",
-            supported_tags,
-            supported_dtypes,
-            stateful: false,
-        },
+        ann: AnnCapabilities::new("probe", supported_tags, supported_dtypes),
         devices,
         batch: false,
         sequence_cache: false,
