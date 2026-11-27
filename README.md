@@ -137,7 +137,7 @@ by cross-crate parity tests in hybrid-fusion's `smoke/cortex-neuromod` package
 
 ```toml
 [dependencies]
-cortex-hybrid = { version = "0.2", features = ["neuromod"] }
+cortex-hybrid = { version = "0.3", features = ["neuromod"] }
 ```
 
 ```rust
@@ -317,7 +317,7 @@ so imports are `use cortex_hybrid::…`.
 
 ```toml
 [dependencies]
-cortex-hybrid = "0.2"
+cortex-hybrid = "0.3"
 ```
 
 Features (all off by default):
