@@ -491,10 +491,15 @@ fn moe_stages_are_rejected_and_rejection_is_atomic() {
     let bindings = ExternalBindings::new()
         .with_tensor("hidden", &hidden)
         .expect("bind hidden");
-    let err = run_topology(&mut composed, &moe_topo, &bindings).unwrap_err();
+    let mut rec = RecordingExecutor::new(&mut composed);
+    let err = run_topology(&mut rec, &moe_topo, &bindings).unwrap_err();
     assert!(
         matches!(err, CortexError::UnsupportedStage { ref stage_id, .. } if stage_id == "expert"),
         "driver should fail at the MoE stage, got {err:?}"
+    );
+    assert!(
+        rec.executed.is_empty(),
+        "capability pre-check must reject the run before any stage executes"
     );
 
     // Failure-atomicity: after the rejection, the SAME executor still runs the
