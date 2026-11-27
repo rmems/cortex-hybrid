@@ -160,7 +160,7 @@ an ordered graph of stages, then run it through a swappable backend.
 | `StageKind` / `StageKindTag` | What a stage computes (embedding, attention, layer/RMS norm, dense/gated MLP, MoE router/expert, add, readout, custom) and its fieldless tag for capability checks. |
 | `AnnStage` / `StageId` / `AnnTopology` | A stage (validated dotted-path id + kind + input wiring) and a validated, topologically-ordered graph of them, with `sub_span` extraction and `SubSpan::to_topology` to run a span against externally supplied stage outputs. |
 | `AnnExecutor` / `AnnCapabilities` | The execution contract (generic over the backend's tensor type — it never names `Tensor`) plus capability reporting, mirroring `snn::SnnBackend`. |
-| `run_topology` / `ExternalBindings` | Composition driver that runs an executor over a topology, resolving external ingress (tokens or hidden-state tensors; one name, one binding) and, for a sub-span topology, the earlier-stage outputs bound with `with_stage_output`. |
+| `run_topology` / `run_topology_with_egress` / `ExternalBindings` | Composition driver that runs an executor over a topology, resolving external ingress (tokens or hidden-state tensors; one name, one binding) and, for a sub-span topology, the earlier-stage outputs bound with `with_stage_output`. `run_topology_with_egress` returns only a caller-chosen egress set of stage outputs. |
 | `ReferenceExecutor` | The reference backend (see below) and `from_transformer`, which emits a block-ordered topology for a `TransformerLM`. |
 
 `ReferenceExecutor` is the reference backend: `f32`, CPU-only, and dense. It

@@ -374,7 +374,8 @@ fn sub_span_with_two_external_stage_deps_runs_from_bound_outputs() {
         .expect("bind norm1");
     let err = run_topology(&mut exec, &span_topo, &partial).unwrap_err();
     assert!(
-        matches!(err, CortexError::MissingStageBinding { ref name } if name == "embedding"),
+        matches!(err, CortexError::MissingStageBinding { ref stage_id, ref name }
+            if stage_id == "blocks.0.residual1" && name == "embedding"),
         "got {err:?}"
     );
 
@@ -457,8 +458,9 @@ fn moe_stages_are_rejected_and_rejection_is_atomic() {
         other => panic!("expected UnsupportedStage, got {other:?}"),
     }
 
-    // A topology with a MoE stage AFTER a normalization stage: the driver runs
-    // the norm, then returns UnsupportedStage at the MoE stage.
+    // A topology with a MoE stage after a normalization stage: the driver's
+    // capability pre-check fails the run before any stage executes, naming the
+    // unsupported stage.
     let norm_id = id("norm");
     let moe_id = id("expert");
     let mut composed = ReferenceExecutor::new().bind(

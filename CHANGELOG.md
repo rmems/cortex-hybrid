@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `run_topology_with_egress(executor, topology, bindings, retain)` returns only the outputs of the stages listed in `retain`. Every stage still executes — intermediates feed downstream stages whether or not they are retained — so the egress set selects what the caller gets back rather than skipping work. An unproduced `retain` id is `InvalidTopology`, reported before anything runs (RM-2094 / #106).
+
+### Changed
+
+- **Breaking (stage errors / `run_topology`, RM-2094 / #106):**
+  - `run_topology` fails closed before the first `execute`: the first stage whose kind is not in `AnnCapabilities::supported_tags` returns `UnsupportedStage` (previously earlier stages ran first), and every bound ingress tensor — `ExternalBindings::with_tensor` names and `with_stage_output` dependencies alike — is dtype-checked against `AnnCapabilities::supported_dtypes`, returning `StageDTypeMismatch` naming the consuming stage (the `StageDTypeMismatch` docs always said "a stage input or output" but only outputs were checked).
+  - `MissingStageBinding` gains a `stage_id` field naming the stage that needed the binding (for a declared external stage dependency, the first stage referencing it). Callers matching on the old single-field variant must update.
+  - Errors returned by `AnnExecutor::execute` that do not already carry stage context are wrapped in `StageFailed { stage_id, .. }` instead of passing through unscoped; `stage_id`-bearing variants and `StageFailed` itself pass through unchanged.
+  - `StageKind::Add` is now strictly binary: any arity other than two returns `StageInputArity { expected: 2, .. }` (previously `Add` left-folded any number of inputs and reported `expected: 1` on zero inputs). `CandleExecutor` enforces the same arity.
+
 ## [0.2.0] - 2026-11-24
 
 ### Packaging

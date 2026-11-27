@@ -198,13 +198,19 @@ pub enum CortexError {
         got: String,
     },
 
-    /// A composition run had no binding for a named external ingress.
+    /// A composition run had no binding for a named external ingress or a
+    /// declared external stage dependency.
     ///
-    /// The field is deliberately not named `source`: `thiserror` would treat a
-    /// field named `source` as the error cause and require it to implement
-    /// [`std::error::Error`], but here it is just the external ingress name.
-    #[error("missing binding for external stage source '{name}'")]
-    MissingStageBinding { name: String },
+    /// `stage_id` is the stage that needed the binding (for a declared
+    /// dependency, the first stage referencing it); `name` is the missing
+    /// external ingress name or stage id.
+    ///
+    /// The `name` field is deliberately not named `source`: `thiserror` would
+    /// treat a field named `source` as the error cause and require it to
+    /// implement [`std::error::Error`], but here it is just the external
+    /// ingress name.
+    #[error("stage '{stage_id}' has no binding for external stage source '{name}'")]
+    MissingStageBinding { stage_id: String, name: String },
 
     /// A binding name was supplied twice (for example as both token ids and a
     /// tensor), or a bound stage output names a stage the topology itself
