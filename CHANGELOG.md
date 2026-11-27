@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Packaging
 
-- Crate version set to 0.3.0 (unreleased) so cargo semver-checks against the 0.2.0 baseline accepts the breaking MissingStageBinding.stage_id field addition required by #106.
+- Crate version set to 0.3.0 (unreleased) so `cargo semver-checks` against the `v0.2.0` baseline accepts the breaking `MissingStageBinding.stage_id` field addition required by #106.
 
 ### Added
 

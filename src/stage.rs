@@ -835,11 +835,15 @@ fn binding_kind<T>(binding: &Binding<'_, T>) -> &'static str {
 /// and do not appear in the returned map. The first error encountered stops
 /// the run.
 ///
-/// The driver fails closed **before the first [`AnnExecutor::execute`]**, so a
-/// rejected run never leaves a stateful executor half-advanced:
+/// Preflight fails closed **before the first [`AnnExecutor::execute`]**, so a
+/// topology rejected in the checks below never leaves a stateful executor
+/// half-advanced. After preflight succeeds, a later `execute` failure stops
+/// the run at that stage; earlier stages have already been applied and are
+/// not rolled back.
 ///
 /// * every stage kind must be advertised in
-///   [`AnnCapabilities::supported_tags`];
+///   [`AnnCapabilities::supported_tags`] (this uses [`StageKind::tag`]; every
+///   [`StageKind::Custom`] name shares [`StageKindTag::Custom`]);
 /// * every [`StageSource::External`] name and declared external stage
 ///   dependency must be bound; and
 /// * every bound ingress tensor must report a [`DType`] in
@@ -882,7 +886,8 @@ pub fn run_topology<E: AnnExecutor>(
 ///
 /// Every stage still executes — intermediates feed downstream stages whether
 /// or not they are retained — so `retain` selects the egress set a caller gets
-/// back rather than skipping work. Each id in `retain` must name a stage the
+/// back rather than skipping work. Intermediates remain in memory until the
+/// run finishes; `retain` only filters the returned map. Each id in `retain` must name a stage the
 /// topology produces; a bound external stage dependency is an input, not a
 /// produced output, and cannot be retained.
 ///
