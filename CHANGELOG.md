@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Packaging
+
+- Crate version set to 0.3.0 (unreleased) so cargo semver-checks against the 0.2.0 baseline accepts the breaking MissingStageBinding.stage_id field addition required by #106.
+
 ### Added
 
 - `run_topology_with_egress(executor, topology, bindings, retain)` returns only the outputs of the stages listed in `retain`. Every stage still executes — intermediates feed downstream stages whether or not they are retained — so the egress set selects what the caller gets back rather than skipping work. An unproduced `retain` id is `InvalidTopology`, reported before anything runs (RM-2094 / #106).
