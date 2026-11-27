@@ -320,7 +320,7 @@ Q6_K token rows call `engram_parser::dequantize_q6_k`. That is the same live pat
 The package is `cortex-hybrid` and the library is `cortex_hybrid`,
 so imports are `use cortex_hybrid::…`.
 
-From crates.io (0.3.0 and later):
+From crates.io (0.3.x):
 
 ```toml
 [dependencies]
