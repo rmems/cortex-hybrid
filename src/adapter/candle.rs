@@ -57,10 +57,7 @@ impl std::fmt::Debug for CandleTensor {
 
 impl StageTensor for CandleTensor {
     fn meta(&self) -> TensorMeta {
-        TensorMeta {
-            shape: self.inner.dims().to_vec(),
-            dtype: DType::F32,
-        }
+        TensorMeta::new(self.inner.dims().to_vec(), DType::F32)
     }
 }
 
@@ -519,12 +516,11 @@ impl AnnExecutor for CandleExecutor {
     type Tensor = CandleTensor;
 
     fn capabilities(&self) -> AnnCapabilities {
-        AnnCapabilities {
-            backend_name: Self::BACKEND_NAME,
-            supported_tags: Self::supported_tags(),
-            supported_dtypes: BTreeSet::from([DType::F32]),
-            stateful: false,
-        }
+        AnnCapabilities::new(
+            Self::BACKEND_NAME,
+            Self::supported_tags(),
+            BTreeSet::from([DType::F32]),
+        )
     }
 
     fn execute(

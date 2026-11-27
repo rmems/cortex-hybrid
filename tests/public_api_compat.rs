@@ -4,7 +4,9 @@
 //! for pre-1.0 source compatibility. If a signature here fails to compile, the
 //! wrapper was removed or changed without a SemVer decision (see RM-1353).
 
-use cortex_hybrid::stage::{AnnStage, AnnTopology, ReferenceExecutor, StageId};
+use cortex_hybrid::stage::{
+    AnnStage, AnnTopology, DType, ReferenceExecutor, StageId, StageKindTag, TensorMeta,
+};
 use cortex_hybrid::tensor::ops::{
     batched_matmul, embedding, layer_norm, matmul, rms_norm, try_batched_matmul, try_causal_mask,
     try_embedding, try_layer_norm, try_matmul, try_rms_norm,
@@ -51,6 +53,8 @@ fn stage_execution_apis_have_stable_signatures() {
     let _: fn(String) -> Result<StageId> = StageId::new;
     // Validated topology constructor over an ordered stage list.
     let _: fn(Vec<AnnStage>) -> Result<AnnTopology> = AnnTopology::new;
+    // Non-exhaustive stage-boundary metadata is built through constructors.
+    let _: fn(Vec<usize>, DType) -> TensorMeta = TensorMeta::new;
     // Lifetime-generic model-to-topology builder: the returned executor borrows
     // from the model, tying its lifetime to the input. The fn item does not
     // coerce to a higher-ranked `for<'a> fn(...)` pointer, so pin the exact
@@ -86,12 +90,16 @@ fn external_adapter_contract_is_public() {
     fn marker<T: ExternalAdapterMarker<Tensor = cortex_hybrid::Tensor>>() {}
     marker::<ReferenceExecutor<'static>>();
 
-    let caps = AnnCapabilities {
-        backend_name: "pin",
-        supported_tags: Default::default(),
-        supported_dtypes: Default::default(),
-        stateful: false,
-    };
+    // `AnnCapabilities` is `#[non_exhaustive]`; pin the constructor and the
+    // `stateful` builder so the public construction path cannot regress.
+    let _: fn(
+        &'static str,
+        std::collections::BTreeSet<StageKindTag>,
+        std::collections::BTreeSet<DType>,
+    ) -> AnnCapabilities = AnnCapabilities::new;
+    let _: fn(AnnCapabilities, bool) -> AnnCapabilities = AnnCapabilities::with_stateful;
+
+    let caps = AnnCapabilities::new("pin", Default::default(), Default::default());
     let report = AdapterCapabilities {
         ann: caps,
         devices: Default::default(),

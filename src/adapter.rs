@@ -354,12 +354,7 @@ fn policy_stub_capabilities(
     framework_name: &'static str,
 ) -> AdapterCapabilities {
     AdapterCapabilities {
-        ann: AnnCapabilities {
-            backend_name,
-            supported_tags: BTreeSet::new(),
-            supported_dtypes: BTreeSet::new(),
-            stateful: false,
-        },
+        ann: AnnCapabilities::new(backend_name, BTreeSet::new(), BTreeSet::new()),
         devices: BTreeSet::new(),
         batch: false,
         sequence_cache: false,
@@ -403,10 +398,7 @@ macro_rules! define_policy_stub_adapter {
 
         impl $crate::stage::StageTensor for $tensor {
             fn meta(&self) -> $crate::stage::TensorMeta {
-                $crate::stage::TensorMeta {
-                    shape: self.shape.clone(),
-                    dtype: self.dtype,
-                }
+                $crate::stage::TensorMeta::new(self.shape.clone(), self.dtype)
             }
         }
 
