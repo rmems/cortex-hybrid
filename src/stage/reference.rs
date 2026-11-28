@@ -473,10 +473,15 @@ impl<'p> ReferenceExecutor<'p> {
 
     /// Copy an interchange buffer into a reference tensor.
     ///
+    /// Valid buffer metadata does not guarantee that the shape's row-major
+    /// strides fit in `usize`. For example, `[0, usize::MAX, 2]` has no elements
+    /// but overflows a stride.
+    ///
     /// # Errors
     ///
-    /// Returns [`CortexError::StageDTypeMismatch`] for a non-`f32` buffer and
-    /// [`CortexError::StageFailed`] when the element count does not match the shape.
+    /// Returns [`CortexError::StageDTypeMismatch`] for a non-`f32` buffer,
+    /// or [`CortexError::StageFailed`] wrapping an element-count or stride
+    /// error.
     pub fn import_hidden(buffer: &crate::adapter::HiddenStateBuffer) -> Result<Tensor> {
         buffer.cpu_f32_meta()?;
         Tensor::try_from_vec(buffer.data.clone(), &buffer.shape).map_err(|err| {

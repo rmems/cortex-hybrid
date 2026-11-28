@@ -192,7 +192,7 @@ reorder, or backend placement is implied.
 
 | Boundary | Conversion |
 |---|---|
-| CPU reference | `ReferenceExecutor::export_hidden` / `import_hidden` copy through `HiddenStateBuffer`, including through `ExternalAdapter`. |
+| CPU reference | `ReferenceExecutor::export_hidden` / `import_hidden` copy through `HiddenStateBuffer`, including through `ExternalAdapter`. Import can reject empty shapes if their row-major strides overflow. |
 | Optional Candle | `adapter::export_hidden_buffer` / `import_hidden_buffer` copy the same profile. The existing `HiddenState` functions still work. `CandleExecutor` implements `AnnExecutor`, but not `ExternalAdapterMarker`. Candle can reject empty shapes whose native size arithmetic overflows. |
 | Optional Burn | Policy-only `BurnAdapter` advertises no hidden-state transfer and rejects import/export. No Burn dependency or native tensor is required. |
 | Hybrid-fusion boundary | Map the copied shape/dtype/payload placement/layout to the caller's own contract. `NegotiationDocument` reports capabilities separately from payload metadata; backend selection, stage placement, and ANN↔SNN conversion belong downstream. |
