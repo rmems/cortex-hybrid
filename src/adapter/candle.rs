@@ -12,7 +12,7 @@
 //! MoE router, MoE expert, and custom stages are rejected with
 //! [`CortexError::UnsupportedStage`](crate::CortexError::UnsupportedStage).
 
-use crate::error::{CortexError, Result};
+use crate::error::{CortexError, ReportedDType, Result};
 use crate::stage::{
     AnnCapabilities, AnnExecutor, AnnStage, DType, MlpKind, NormKind, StageId, StageInput,
     StageKind, StageKindTag, StageTensor, TensorMeta,
@@ -85,11 +85,20 @@ const HIDDEN_STATE: &str = "hidden_state";
 /// Reject a non-`f32` tensor with [`CortexError::StageDTypeMismatch`] and a
 /// non-CPU tensor with [`CortexError::UnsupportedOperation`] (`category: "device"`).
 fn require_cpu_f32(inner: &Tensor, stage_id: &str) -> Result<()> {
-    if inner.dtype() != candle_core::DType::F32 {
+    let got = match inner.dtype() {
+        candle_core::DType::F32 => None,
+        candle_core::DType::F16 => Some(DType::F16.into()),
+        candle_core::DType::BF16 => Some(DType::BF16.into()),
+        dtype => Some(ReportedDType::BackendNative {
+            backend: CandleExecutor::BACKEND_NAME,
+            name: dtype.as_str(),
+        }),
+    };
+    if let Some(got) = got {
         return Err(CortexError::StageDTypeMismatch {
             stage_id: stage_id.to_string(),
-            expected: DType::F32.to_string(),
-            got: inner.dtype().as_str().to_string(),
+            expected: vec![DType::F32],
+            got,
         });
     }
     if !inner.device().is_cpu() {
@@ -504,8 +513,8 @@ impl CandleExecutor {
         if params.tag() != expected {
             return Err(CortexError::StageParamsMismatch {
                 stage_id: stage_id.to_string(),
-                expected: expected.as_str().to_string(),
-                got: params.tag().as_str().to_string(),
+                expected,
+                got: params.tag(),
             });
         }
         Ok(params)
@@ -533,7 +542,7 @@ impl AnnExecutor for CandleExecutor {
             return Err(CortexError::UnsupportedStage {
                 backend: Self::BACKEND_NAME,
                 stage_id: stage_id.to_string(),
-                kind: format!("{:?}", stage.kind),
+                kind: stage.kind.tag(),
             });
         }
 
@@ -614,7 +623,7 @@ impl AnnExecutor for CandleExecutor {
             | StageKind::Custom { .. } => Err(CortexError::UnsupportedStage {
                 backend: Self::BACKEND_NAME,
                 stage_id: stage_id.to_string(),
-                kind: format!("{:?}", stage.kind),
+                kind: stage.kind.tag(),
             }),
         }
     }
@@ -1184,7 +1193,8 @@ mod tests {
             matches!(
                 &err,
                 CortexError::StageDTypeMismatch { stage_id, expected, got }
-                    if stage_id == "blocks.0.mlp" && expected == "f32" && got == "f64"
+                    if stage_id == "blocks.0.mlp" && expected == &[DType::F32]
+                    && *got == (ReportedDType::BackendNative { backend: "candle", name: "f64" })
             ),
             "{err:?}"
         );
@@ -1195,7 +1205,7 @@ mod tests {
             matches!(
                 &err,
                 CortexError::StageDTypeMismatch { stage_id, got, .. }
-                    if stage_id == HIDDEN_STATE && got == "f64"
+                    if stage_id == HIDDEN_STATE && *got == (ReportedDType::BackendNative { backend: "candle", name: "f64" })
             ),
             "{err:?}"
         );

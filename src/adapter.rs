@@ -448,7 +448,7 @@ macro_rules! define_policy_stub_adapter {
                 Err($crate::CortexError::UnsupportedStage {
                     backend: $backend,
                     stage_id: stage.id.to_string(),
-                    kind: format!("{:?}", stage.kind),
+                    kind: stage.kind.tag(),
                 })
             }
         }
@@ -463,8 +463,8 @@ pub(crate) fn require_f32_buffer(buffer: &HiddenStateBuffer) -> Result<()> {
     if buffer.dtype != DType::F32 {
         return Err(CortexError::StageDTypeMismatch {
             stage_id: "hidden_state".to_string(),
-            expected: DType::F32.to_string(),
-            got: buffer.dtype.to_string(),
+            expected: vec![DType::F32],
+            got: buffer.dtype.into(),
         });
     }
     // Shared with the tensor constructors and the Candle adapter: a zero axis
@@ -537,13 +537,8 @@ pub fn require_supported_dtype<T: StageTensor>(
     } else {
         Err(CortexError::StageDTypeMismatch {
             stage_id: stage_id.to_string(),
-            expected: caps
-                .supported_dtypes
-                .iter()
-                .map(|dtype| dtype.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            got: dtype.to_string(),
+            expected: caps.supported_dtypes.iter().copied().collect(),
+            got: dtype.into(),
         })
     }
 }

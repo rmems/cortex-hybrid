@@ -25,7 +25,8 @@ use std::collections::BTreeMap;
 
 use cortex_hybrid::stage::{
     AnnCapabilities, AnnExecutor, AnnStage, AnnTopology, DType, ExternalBindings, NormKind,
-    ReferenceExecutor, StageId, StageInput, StageKind, StageSource, StageTensor, run_topology,
+    ReferenceExecutor, StageId, StageInput, StageKind, StageKindTag, StageSource, StageTensor,
+    run_topology,
 };
 use cortex_hybrid::tensor::ops::try_layer_norm;
 use cortex_hybrid::transformer::{MultiHeadAttention, TransformerConfig, TransformerLM};
@@ -453,7 +454,7 @@ fn moe_stages_are_rejected_and_rejection_is_atomic() {
         } => {
             assert_eq!(backend, "reference");
             assert_eq!(stage_id, "router");
-            assert!(kind.contains("MoeRouter"), "kind carried: {kind}");
+            assert_eq!(kind, StageKindTag::MoeRouter);
         }
         other => panic!("expected UnsupportedStage, got {other:?}"),
     }

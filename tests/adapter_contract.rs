@@ -170,6 +170,40 @@ fn hidden_state_import_accepts_zero_axis_after_overflowing_prefix() {
 }
 
 #[test]
+fn supported_dtype_errors_expose_typed_values_and_stable_display() {
+    use cortex_hybrid::adapter::require_supported_dtype;
+    use cortex_hybrid::error::ReportedDType;
+    use cortex_hybrid::stage::TensorMeta;
+
+    struct Probe(DType);
+
+    impl StageTensor for Probe {
+        fn meta(&self) -> TensorMeta {
+            TensorMeta::new(vec![1], self.0)
+        }
+    }
+
+    let caps = AnnCapabilities::new(
+        "probe",
+        BTreeSet::from([StageKindTag::Add]),
+        BTreeSet::from([DType::BF16, DType::F32]),
+    );
+    let stage_id = StageId::new("probe_add").expect("valid id");
+    require_supported_dtype(&caps, &stage_id, &Probe(DType::BF16)).expect("allowed dtype");
+    let err = require_supported_dtype(&caps, &stage_id, &Probe(DType::F16)).unwrap_err();
+    assert!(matches!(
+        &err,
+        CortexError::StageDTypeMismatch {
+            stage_id, expected, got: ReportedDType::Stage(DType::F16),
+        } if stage_id == "probe_add" && expected == &[DType::F32, DType::BF16]
+    ));
+    assert_eq!(
+        err.to_string(),
+        "stage 'probe_add' dtype mismatch: expected f32, bf16, got f16"
+    );
+}
+
+#[test]
 fn reference_rejects_unsupported_stage_before_touching_inputs() {
     let model = tiny_model(1);
     let (mut executor, _) = ReferenceExecutor::from_transformer(&model).expect("bind");
@@ -190,7 +224,7 @@ fn reference_rejects_unsupported_stage_before_touching_inputs() {
         } => {
             assert_eq!(backend, "reference");
             assert_eq!(stage_id, "router");
-            assert!(kind.contains("MoeRouter"), "{kind}");
+            assert_eq!(kind, StageKindTag::MoeRouter);
         }
         other => panic!("expected UnsupportedStage, got {other:?}"),
     }
@@ -499,7 +533,7 @@ fn burn_feature_stays_a_structured_stub_on_this_toolchain() {
         assert!(matches!(
             err,
             CortexError::UnsupportedStage { backend, stage_id, kind }
-                if backend == "burn" && stage_id == "probe_add" && kind.contains("Add")
+                if backend == "burn" && stage_id == "probe_add" && kind == StageKindTag::Add
         ));
     }
 }

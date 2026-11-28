@@ -1,6 +1,46 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::stage::{DType, StageKindTag};
+use std::fmt;
 use thiserror::Error;
+
+/// The dtype observed when an executor or its adapter rejects a tensor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReportedDType {
+    /// A dtype in the backend-neutral stage vocabulary.
+    Stage(DType),
+    /// A backend-native dtype outside the stage vocabulary, such as Candle's f64.
+    BackendNative {
+        /// Backend that reported the dtype.
+        backend: &'static str,
+        /// The backend's dtype token.
+        name: &'static str,
+    },
+}
+
+impl From<DType> for ReportedDType {
+    fn from(dtype: DType) -> Self {
+        Self::Stage(dtype)
+    }
+}
+
+impl fmt::Display for ReportedDType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stage(dtype) => fmt::Display::fmt(dtype, f),
+            Self::BackendNative { name, .. } => f.write_str(name),
+        }
+    }
+}
+
+fn display_dtypes(dtypes: &[DType]) -> String {
+    dtypes
+        .iter()
+        .map(|dtype| dtype.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 #[non_exhaustive]
 #[derive(Error, Debug)]
@@ -76,9 +116,6 @@ pub enum CortexError {
     #[error("input length mismatch: expected {expected}, got {got}")]
     InputLengthMismatch { expected: usize, got: usize },
 
-    #[error("router forward pass failed: {0}")]
-    MoeForward(String),
-
     /// An external SNN backend (e.g. `neuromod`) rejected a step.
     #[error("SNN backend step failed: {0}")]
     SnnBackend(String),
@@ -141,7 +178,7 @@ pub enum CortexError {
     UnsupportedStage {
         backend: &'static str,
         stage_id: String,
-        kind: String,
+        kind: StageKindTag,
     },
 
     /// An external adapter refused an operation its capability report does not cover.
@@ -169,8 +206,8 @@ pub enum CortexError {
     #[error("stage '{stage_id}' has parameters for kind {got}, expected {expected}")]
     StageParamsMismatch {
         stage_id: String,
-        expected: String,
-        got: String,
+        expected: StageKindTag,
+        got: StageKindTag,
     },
 
     /// Parameters are bound for the right stage kind but are internally
@@ -192,11 +229,12 @@ pub enum CortexError {
     StageInputKind { stage_id: String, index: usize },
 
     /// A stage input or output used a dtype the executor does not support.
-    #[error("stage '{stage_id}' dtype mismatch: expected {expected}, got {got}")]
+    /// `expected` lists the accepted stage dtypes in capability order.
+    #[error("stage '{stage_id}' dtype mismatch: expected {accepted}, got {got}", accepted = display_dtypes(.expected))]
     StageDTypeMismatch {
         stage_id: String,
-        expected: String,
-        got: String,
+        expected: Vec<DType>,
+        got: ReportedDType,
     },
 
     /// A composition run had no binding for a named external ingress or a
@@ -240,6 +278,7 @@ pub enum CortexError {
         actual_bytes: usize,
     },
 
+    /// An uncategorized failure (for example, a `candle:`-prefixed internal error).
     #[error("{0}")]
     Msg(String),
 }

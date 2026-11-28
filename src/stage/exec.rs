@@ -348,7 +348,7 @@ fn run_topology_driver<E: AnnExecutor>(
         return Err(CortexError::UnsupportedStage {
             backend: caps.backend_name,
             stage_id: stage.id.to_string(),
-            kind: format!("{:?}", stage.kind),
+            kind: stage.kind.tag(),
         });
     }
 
@@ -408,8 +408,8 @@ fn run_topology_driver<E: AnnExecutor>(
         if !caps.supported_dtypes.contains(&dtype) {
             return Err(CortexError::StageDTypeMismatch {
                 stage_id: stage.id.to_string(),
-                expected: supported_dtype_list(&caps.supported_dtypes),
-                got: dtype.to_string(),
+                expected: caps.supported_dtypes.iter().copied().collect(),
+                got: dtype.into(),
             });
         }
         outputs.insert(stage.id.clone(), output);
@@ -455,15 +455,6 @@ fn scope_to_stage(stage_id: &StageId, err: CortexError) -> CortexError {
     }
 }
 
-/// The `expected` list for a [`CortexError::StageDTypeMismatch`].
-fn supported_dtype_list(supported_dtypes: &BTreeSet<DType>) -> String {
-    supported_dtypes
-        .iter()
-        .map(|d| d.to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// Reject an ingress tensor whose dtype the executor does not support, naming
 /// the stage that consumes it.
 fn check_ingress_dtype<T: StageTensor>(
@@ -477,8 +468,8 @@ fn check_ingress_dtype<T: StageTensor>(
     }
     Err(CortexError::StageDTypeMismatch {
         stage_id: stage_id.to_string(),
-        expected: supported_dtype_list(supported_dtypes),
-        got: dtype.to_string(),
+        expected: supported_dtypes.iter().copied().collect(),
+        got: dtype.into(),
     })
 }
 
@@ -721,8 +712,8 @@ mod tests {
                 got,
             } => {
                 assert_eq!(stage_id, "pass");
-                assert_eq!(expected, "f32");
-                assert_eq!(got, "f16");
+                assert_eq!(expected, [DType::F32]);
+                assert_eq!(got, DType::F16.into());
             }
             other => panic!("expected StageDTypeMismatch, got {other:?}"),
         }
@@ -929,7 +920,7 @@ mod tests {
             } => {
                 assert_eq!(backend, "reference");
                 assert_eq!(stage_id, "router");
-                assert!(kind.contains("MoeRouter"), "kind carried: {kind}");
+                assert_eq!(kind, StageKindTag::MoeRouter);
             }
             other => panic!("expected UnsupportedStage, got {other:?}"),
         }
@@ -978,8 +969,8 @@ mod tests {
                 got,
             } => {
                 assert_eq!(stage_id, "sum");
-                assert_eq!(expected, "f32");
-                assert_eq!(got, "bf16");
+                assert_eq!(expected, [DType::F32]);
+                assert_eq!(got, DType::BF16.into());
             }
             other => panic!("expected StageDTypeMismatch, got {other:?}"),
         }
@@ -1028,8 +1019,8 @@ mod tests {
                 got,
             } => {
                 assert_eq!(stage_id, "sum");
-                assert_eq!(expected, "f32");
-                assert_eq!(got, "f16");
+                assert_eq!(expected, [DType::F32]);
+                assert_eq!(got, DType::F16.into());
             }
             other => panic!("expected StageDTypeMismatch, got {other:?}"),
         }
