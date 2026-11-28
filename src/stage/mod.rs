@@ -22,18 +22,12 @@
 //!
 //! # Intentional omissions
 //!
-//! A `device` field on [`TensorMeta`]/[`AnnCapabilities`] and a concrete
-//! tensor conversion / wire format for crossing the stage boundary are
-//! intentionally **not** modelled here; they are owned by RM-1827. Stage
-//! descriptors ([`AnnStage`], [`StageSource`], [`AnnTopology`]) carry no serde
-//! derives: they describe identity, kind, and wiring only, not a persisted
-//! wire format.
-//!
-//! The optional `candle` feature adds `adapter::CandleExecutor`. That executor
-//! runs stages with Candle's modules and copies row-major `f32` values through
-//! `import_hidden_state` / `export_hidden_state`. That path is `HiddenState`,
-//! not [`crate::adapter::HiddenStateBuffer`], and it is not the deferred
-//! cross-backend wire format.
+//! Stage descriptors ([`AnnStage`], [`StageSource`], [`AnnTopology`]) describe
+//! identity, kind, and wiring; they do not encode a persisted wire format.
+//! [`TensorMeta`] describes shape and dtype without promising native storage
+//! placement or layout. At the copy boundary, [`HiddenStateBuffer`] describes
+//! a dense row-major CPU `f32` payload through its validated
+//! [`crate::adapter::HiddenStateMeta`].
 
 mod descriptor;
 mod exec;

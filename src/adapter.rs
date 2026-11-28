@@ -6,17 +6,17 @@
 //! tensor, device, or module types. An adapter implements [`ExternalAdapterMarker`] with its own
 //! associated tensor, reports capabilities in cortex terms, and converts
 //! hidden state through [`HiddenStateBuffer`]. The optional `candle` feature
-//! compiles `CandleExecutor` in a child module. That executor copies row-major
-//! `f32` values through its own `HiddenState` type and does not implement this
-//! contract. The optional `burn` feature is a policy stub.
+//! compiles `CandleExecutor` in a child module. It can copy the same CPU `f32`
+//! buffer via `import_hidden_buffer` and `export_hidden_buffer` without
+//! implementing `ExternalAdapterMarker`. The optional `burn` feature is a
+//! policy stub and cannot transfer hidden state.
 //!
 //! Capability reports are facts an orchestrator can translate. This module
 //! does not select a backend, rank engines, or place ANN stages against SNN
 //! stages — that negotiation belongs to `hybrid-fusion` (see
 //! [hybrid-fusion#41](https://github.com/rmems/hybrid-fusion/issues/41)).
-//! [`NegotiationDocument`] is the cortex-owned document that translation
-//! consumes. It is not `hybrid-fusion`'s `BackendCapabilities` type, which
-//! has not landed.
+//! [`NegotiationDocument`] reports cortex-owned capability facts; any mapping
+//! into `hybrid-fusion`'s capability or execution types belongs downstream.
 
 use crate::error::{CortexError, Result};
 use crate::stage::{
@@ -77,20 +77,68 @@ pub struct BackendLimitations {
     pub notes: Vec<String>,
 }
 
-/// Owned hidden-state bytes crossing an adapter boundary.
+/// Owned host values crossing an adapter boundary.
 ///
-/// This is the conversion boundary, not a universal tensor format and not a
-/// checkpoint. Adapters copy into and out of their native storage here so
-/// core traits never name that storage.
+/// The portable profile is contiguous, row-major CPU `f32` with extents
+/// listed outermost first. This is an in-process copy boundary, not a wire
+/// format or a checkpoint. Use [`Self::cpu_f32_meta`] to validate a buffer
+/// before use; its public fields do not enforce those invariants.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HiddenStateBuffer {
-    /// Row-major elements in the reference interchange dtype of `dtype`.
-    /// `F32` payloads are IEEE-754 `f32` bits stored as `f32` values.
+    /// IEEE-754 `f32` values in row-major order (last axis varies fastest).
     pub data: Vec<f32>,
     /// Row-major extents, outermost dimension first.
     pub shape: Vec<usize>,
     /// Element type the producing adapter claims.
     pub dtype: DType,
+}
+
+/// Storage layout of a portable hidden-state payload.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenStateLayout {
+    /// Dense, contiguous row-major layout with no strides or padding stored.
+    RowMajor,
+}
+
+/// Shape, dtype, device class, and layout of a validated [`HiddenStateBuffer`].
+///
+/// These facts describe the copied host payload, not the source or destination
+/// backend's native tensor, device ordinal, or placement decision.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HiddenStateMeta<'a> {
+    /// Extents, outermost dimension first. Stage-specific rank/axis meaning
+    /// is checked separately by the receiving stage.
+    pub shape: &'a [usize],
+    /// Element type of the payload.
+    pub dtype: DType,
+    /// Device class of the payload's storage.
+    pub device: DeviceClass,
+    /// Layout of the payload's storage.
+    pub layout: HiddenStateLayout,
+}
+
+impl HiddenStateBuffer {
+    /// Validate the portable CPU `f32` profile and borrow its metadata.
+    ///
+    /// Checks the declared dtype and that the checked number of elements
+    /// matches the payload length. This does not validate stage-specific
+    /// shapes, finite values, backend capabilities, or placement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CortexError::StageDTypeMismatch`] for non-`f32` and
+    /// [`CortexError::StageFailed`] for an invalid or overflowing element count.
+    pub fn cpu_f32_meta(&self) -> Result<HiddenStateMeta<'_>> {
+        require_f32_buffer(self)?;
+        Ok(HiddenStateMeta {
+            shape: &self.shape,
+            dtype: self.dtype,
+            device: DeviceClass::Cpu,
+            layout: HiddenStateLayout::RowMajor,
+        })
+    }
 }
 
 /// Capability report every external adapter and the reference backend share.
@@ -112,9 +160,8 @@ pub struct AdapterCapabilities {
 
 /// Cortex-owned facts an orchestrator translates into its own negotiation type.
 ///
-/// Field names here are stable for that translation. They are not
-/// `hybrid-fusion`'s future `BackendCapabilities` struct: that type has not
-/// landed (hybrid-fusion#41), and this crate does not depend on `hybrid-fusion`.
+/// Field names here are stable for that translation. This crate neither
+/// depends on `hybrid-fusion` nor supplies its capability type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegotiationDocument {
     /// [`AnnCapabilities::backend_name`].
@@ -459,7 +506,7 @@ macro_rules! define_policy_stub_adapter {
 pub(crate) use define_policy_stub_adapter;
 
 /// Reject a hidden-state dtype the reference path cannot store.
-pub(crate) fn require_f32_buffer(buffer: &HiddenStateBuffer) -> Result<()> {
+fn require_f32_buffer(buffer: &HiddenStateBuffer) -> Result<()> {
     if buffer.dtype != DType::F32 {
         return Err(CortexError::StageDTypeMismatch {
             stage_id: "hidden_state".to_string(),
@@ -548,8 +595,9 @@ mod candle;
 #[cfg(feature = "candle")]
 pub use candle::{
     AttentionWeights, CandleExecutor, CandleTensor, EmbeddingWeights, GatedMlpWeights, HiddenState,
-    LayerNormWeights, LinearWeights, MlpWeights, RmsNormWeights, export_hidden_state,
-    export_reference, import_hidden_state, import_reference,
+    LayerNormWeights, LinearWeights, MlpWeights, RmsNormWeights, export_hidden_buffer,
+    export_hidden_state, export_reference, import_hidden_buffer, import_hidden_state,
+    import_reference,
 };
 
 #[cfg(feature = "burn")]

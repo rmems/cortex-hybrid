@@ -6,7 +6,7 @@ use super::descriptor::{
 };
 use super::exec::{AnnCapabilities, AnnExecutor, StageInput};
 use super::topology::AnnTopology;
-use crate::adapter::{self, require_f32_buffer};
+use crate::adapter;
 use crate::error::{CortexError, Result};
 use crate::tensor::Tensor;
 use crate::tensor::ops::{try_layer_norm, try_matmul, try_rms_norm};
@@ -473,12 +473,17 @@ impl<'p> ReferenceExecutor<'p> {
 
     /// Copy an interchange buffer into a reference tensor.
     ///
+    /// Valid buffer metadata does not guarantee that the shape's row-major
+    /// strides fit in `usize`. For example, `[0, usize::MAX, 2]` has no elements
+    /// but overflows a stride.
+    ///
     /// # Errors
     ///
-    /// Returns [`CortexError::StageDTypeMismatch`] for a non-`f32` buffer and
-    /// [`CortexError::StageFailed`] when the element count does not match the shape.
+    /// Returns [`CortexError::StageDTypeMismatch`] for a non-`f32` buffer,
+    /// or [`CortexError::StageFailed`] wrapping an element-count or stride
+    /// error.
     pub fn import_hidden(buffer: &crate::adapter::HiddenStateBuffer) -> Result<Tensor> {
-        require_f32_buffer(buffer)?;
+        buffer.cpu_f32_meta()?;
         Tensor::try_from_vec(buffer.data.clone(), &buffer.shape).map_err(|err| {
             CortexError::StageFailed {
                 stage_id: "hidden_state".to_string(),
