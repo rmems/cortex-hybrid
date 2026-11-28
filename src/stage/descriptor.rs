@@ -41,8 +41,8 @@ impl DType {
 /// This is metadata only: it never carries data, so an executor can report an
 /// output's shape and dtype without exposing its concrete storage.
 ///
-/// `#[non_exhaustive]` so additional fields (a device field is deferred to
-/// RM-1827) can be added without a second breaking release. Construct with
+/// The device and layout of a copied host payload are available separately
+/// in [`crate::adapter::HiddenStateMeta`]. Construct this type with
 /// [`TensorMeta::new`]; fields stay readable.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]

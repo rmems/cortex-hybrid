@@ -6,7 +6,7 @@ use super::descriptor::{
 };
 use super::exec::{AnnCapabilities, AnnExecutor, StageInput};
 use super::topology::AnnTopology;
-use crate::adapter::{self, require_f32_buffer};
+use crate::adapter;
 use crate::error::{CortexError, Result};
 use crate::tensor::Tensor;
 use crate::tensor::ops::{try_layer_norm, try_matmul, try_rms_norm};
@@ -478,7 +478,7 @@ impl<'p> ReferenceExecutor<'p> {
     /// Returns [`CortexError::StageDTypeMismatch`] for a non-`f32` buffer and
     /// [`CortexError::StageFailed`] when the element count does not match the shape.
     pub fn import_hidden(buffer: &crate::adapter::HiddenStateBuffer) -> Result<Tensor> {
-        require_f32_buffer(buffer)?;
+        buffer.cpu_f32_meta()?;
         Tensor::try_from_vec(buffer.data.clone(), &buffer.shape).map_err(|err| {
             CortexError::StageFailed {
                 stage_id: "hidden_state".to_string(),

@@ -3,7 +3,9 @@
 //! CPU `f32` [`AnnExecutor`](crate::stage::AnnExecutor) backed by Candle.
 //!
 //! Hidden state enters and leaves through [`import_hidden_state`] and
-//! [`export_hidden_state`]. Weights are converted once, when a stage is bound.
+//! [`export_hidden_state`], or the shared CPU `f32` buffer through
+//! [`import_hidden_buffer`] and [`export_hidden_buffer`]. Weights are converted
+//! once, when a stage is bound.
 //! Stage bodies call Candle modules (`Embedding`, `Linear`, `LayerNorm`,
 //! `RmsNorm`, `Activation`) and Candle's CPU flash-attention kernel. They do
 //! not reimplement those kernels. Candle's fused `sdpa` op has no CPU
@@ -12,6 +14,7 @@
 //! MoE router, MoE expert, and custom stages are rejected with
 //! [`CortexError::UnsupportedStage`](crate::CortexError::UnsupportedStage).
 
+use super::HiddenStateBuffer;
 use crate::error::{CortexError, ReportedDType, Result};
 use crate::stage::{
     AnnCapabilities, AnnExecutor, AnnStage, DType, MlpKind, NormKind, StageId, StageInput,
@@ -131,7 +134,25 @@ fn require_cpu_f32(inner: &Tensor, stage_id: &str) -> Result<()> {
 /// but returns `SizeOverflow` here: candle-core 0.11 multiplies every extent
 /// without short-circuiting on zero and panics on the overflow.
 pub fn import_hidden_state(state: &HiddenState) -> Result<CandleTensor> {
-    let inner = f32_tensor(&state.data, &state.shape, &Device::Cpu)?;
+    import_cpu_f32(&state.data, &state.shape)
+}
+
+/// Validate and copy a shared hidden-state buffer into a CPU Candle tensor.
+///
+/// No dtype conversion, axis reordering, device transfer, or intermediate
+/// `HiddenState` copy is performed here.
+///
+/// # Errors
+///
+/// See [`HiddenStateBuffer::cpu_f32_meta`] for invalid portable metadata and
+/// [`import_hidden_state`] for Candle-specific shape and import failures.
+pub fn import_hidden_buffer(buffer: &HiddenStateBuffer) -> Result<CandleTensor> {
+    let meta = buffer.cpu_f32_meta()?;
+    import_cpu_f32(&buffer.data, meta.shape)
+}
+
+fn import_cpu_f32(data: &[f32], shape: &[usize]) -> Result<CandleTensor> {
+    let inner = f32_tensor(data, shape, &Device::Cpu)?;
     CandleTensor::from_candle(inner, HIDDEN_STATE)
 }
 
@@ -153,6 +174,20 @@ pub fn export_hidden_state(tensor: &CandleTensor) -> Result<HiddenState> {
     Ok(HiddenState {
         data: flat,
         shape: tensor.inner.dims().to_vec(),
+    })
+}
+
+/// Copy a Candle CPU tensor out through the portable `f32` buffer profile.
+///
+/// # Errors
+///
+/// See [`export_hidden_state`].
+pub fn export_hidden_buffer(tensor: &CandleTensor) -> Result<HiddenStateBuffer> {
+    let state = export_hidden_state(tensor)?;
+    Ok(HiddenStateBuffer {
+        data: state.data,
+        shape: state.shape,
+        dtype: DType::F32,
     })
 }
 
