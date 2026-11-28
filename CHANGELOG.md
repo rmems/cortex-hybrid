@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (stage error payloads, RM-2093 / #105):** `UnsupportedStage.kind` and `StageParamsMismatch.expected` / `got` are `StageKindTag`; use enum patterns instead of string comparisons. `StageDTypeMismatch.expected` is `Vec<DType>` and `got` is `error::ReportedDType`: match `Stage(DType)` for shared dtypes or `BackendNative { backend, name }` for a dtype outside the shared vocabulary. Removed the unused `CortexError::MoeForward` variant. `CortexError::Msg` still covers uncategorized Candle-internal failures.
+
 - **Breaking (stage errors / `run_topology`, RM-2094 / #106):**
   - `run_topology` fails closed before the first `execute`: the first stage whose kind is not in `AnnCapabilities::supported_tags` returns `UnsupportedStage` (previously earlier stages ran first), and every bound ingress tensor — `ExternalBindings::with_tensor` names and `with_stage_output` dependencies alike — is dtype-checked against `AnnCapabilities::supported_dtypes`, returning `StageDTypeMismatch` naming the consuming stage (the `StageDTypeMismatch` docs always said "a stage input or output" but only outputs were checked).
   - `MissingStageBinding` gains a `stage_id` field naming the stage that needed the binding (for a declared external stage dependency, the first stage referencing it). Callers matching on the old single-field variant must update.

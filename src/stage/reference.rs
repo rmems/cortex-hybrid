@@ -460,8 +460,8 @@ impl<'p> ReferenceExecutor<'p> {
         if meta.dtype != DType::F32 {
             return Err(CortexError::StageDTypeMismatch {
                 stage_id: "hidden_state".to_string(),
-                expected: DType::F32.to_string(),
-                got: meta.dtype.to_string(),
+                expected: vec![DType::F32],
+                got: meta.dtype.into(),
             });
         }
         Ok(crate::adapter::HiddenStateBuffer {
@@ -522,7 +522,7 @@ impl<'p> AnnExecutor for ReferenceExecutor<'p> {
             return Err(CortexError::UnsupportedStage {
                 backend: Self::BACKEND_NAME,
                 stage_id: stage_id.to_string(),
-                kind: format!("{:?}", stage.kind),
+                kind: stage.kind.tag(),
             });
         }
 
@@ -542,8 +542,8 @@ impl<'p> AnnExecutor for ReferenceExecutor<'p> {
             if params.tag() != stage.kind.tag() {
                 return Err(CortexError::StageParamsMismatch {
                     stage_id: stage_id.to_string(),
-                    expected: stage.kind.tag().as_str().to_string(),
-                    got: params.tag().as_str().to_string(),
+                    expected: stage.kind.tag(),
+                    got: params.tag(),
                 });
             }
             Some(params)
@@ -624,7 +624,7 @@ impl<'p> AnnExecutor for ReferenceExecutor<'p> {
             _ => Err(CortexError::UnsupportedStage {
                 backend: Self::BACKEND_NAME,
                 stage_id: stage_id.to_string(),
-                kind: format!("{:?}", stage.kind),
+                kind: stage.kind.tag(),
             }),
         }
     }
@@ -702,8 +702,9 @@ mod tests {
                     err,
                     CortexError::UnsupportedStage {
                         backend: "reference",
+                        kind: rejected,
                         ..
-                    }
+                    } if rejected == kind.tag()
                 ),
                 "expected UnsupportedStage for {kind:?}, got {err:?}"
             );
@@ -754,8 +755,8 @@ mod tests {
                 got,
             } => {
                 assert_eq!(stage_id, "n");
-                assert_eq!(expected, "rms_norm");
-                assert_eq!(got, "readout");
+                assert_eq!(expected, StageKindTag::RmsNorm);
+                assert_eq!(got, StageKindTag::Readout);
             }
             other => panic!("expected StageParamsMismatch, got {other:?}"),
         }

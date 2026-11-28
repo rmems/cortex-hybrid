@@ -13,7 +13,7 @@ use cortex_hybrid::adapter::{
 };
 use cortex_hybrid::stage::{
     AnnExecutor, AnnStage, AnnTopology, DType, ExternalBindings, MlpKind, NormKind, StageId,
-    StageInput, StageKind, StageSource, StageTensor, run_topology,
+    StageInput, StageKind, StageKindTag, StageSource, StageTensor, run_topology,
 };
 use cortex_hybrid::tensor::ops::{try_embedding, try_layer_norm, try_matmul, try_rms_norm};
 use cortex_hybrid::{CortexError, Tensor};
@@ -134,6 +134,7 @@ fn unsupported_stage_does_not_drop_bound_params() {
         err,
         CortexError::UnsupportedStage {
             backend: "candle",
+            kind: StageKindTag::MoeRouter,
             ..
         }
     ));
@@ -846,7 +847,7 @@ fn params_kind_mismatch_is_reported_as_mismatch_not_missing() {
         matches!(
             &err,
             CortexError::StageParamsMismatch { stage_id, expected, got }
-                if stage_id == "shared" && expected == "layer_norm" && got == "readout"
+                if stage_id == "shared" && *expected == StageKindTag::LayerNorm && *got == StageKindTag::Readout
         ),
         "{err}"
     );
