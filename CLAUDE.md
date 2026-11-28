@@ -27,7 +27,7 @@ Run the fmt and clippy gates before committing; CI fails on either.
 
 ## Architecture map
 
-- `src/stage.rs`: backend-neutral stage vocabulary (`AnnStage`, `AnnTopology`, `AnnExecutor`), `run_topology`, and `ReferenceExecutor`.
+- `src/stage/`: backend-neutral stage vocabulary (`AnnStage`, `AnnTopology`, `AnnExecutor`), `run_topology`, and `ReferenceExecutor`.
 - `src/adapter.rs` + `src/adapter/`: `ExternalAdapter` capability contract. `candle.rs` (`CandleExecutor`, feature `candle`) and `burn_adapter.rs` (policy stub, feature `burn`).
 - `src/tensor/`: row-major `Vec<f32>` `Tensor`, ops, and the finite-value policy in `finite.rs`.
 - `src/transformer/`, `src/moe/`: reference transformer and dense MoE routing. `moe/checkpoint.rs` binds `engram-parser` output.
