@@ -9,7 +9,7 @@
 //! topology must reproduce the model's output exactly, not merely approximately.
 //!
 //! The test groups together prove the five integration acceptance criteria from
-//! issue #57 (RM-1822); additional stage-layer edge cases live in `src/stage.rs`
+//! issue #57 (RM-1822); additional stage-layer edge cases live in `src/stage/`
 //! unit tests:
 //!
 //! 1. Block-level equivalence against `TransformerBlock`/`MultiHeadAttention`/

@@ -21,7 +21,7 @@ are constraints: don't add GPU code or make a heavy ML framework a required depe
 | `src/moe/` | MoE router, engram-parser checkpoint binding, adapters, routing |
 | `src/snn/` | Optional SNN backend/encoder adapters |
 | `src/adapter.rs` | External-adapter capability contract; `candle` executor and `burn` policy stub live behind features |
-| `src/stage.rs`, `src/reference_json.rs`, `src/types.rs` (incl. `RoutingMode`), `src/error.rs` | Stage execution, reference serde, shared types, errors |
+| `src/stage/`, `src/reference_json.rs`, `src/types.rs` (incl. `RoutingMode`), `src/error.rs` | Stage execution, reference serde, shared types, errors |
 | `tests/` (+ `tests/fixtures/`) | Integration tests (public API compatibility, reference serde, stage execution) |
 
 ## Toolchain
