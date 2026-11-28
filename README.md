@@ -185,15 +185,15 @@ wiring.
 profile is host CPU `f32`, dense contiguous row-major (last axis varies
 fastest), with extents listed outermost first. `cpu_f32_meta()` checks dtype
 and length against the checked shape product and exposes those four facts
-without copying or borrowing the values. An empty shape describes one scalar;
-a zero extent describes an empty payload. The receiving backend or stage can
-reject shapes that its operations do not support. No cast, reshape, axis
+without copying or borrowing the values. The rank-0 shape (`[]`) describes one
+scalar; a shape with a zero extent describes a payload with no elements. The
+receiving backend or stage can reject shapes that its operations do not support. No cast, reshape, axis
 reorder, or backend placement is implied.
 
 | Boundary | Conversion |
 |---|---|
-| CPU reference | `ReferenceExecutor::export_hidden` / `import_hidden` copy through `HiddenStateBuffer`, including through `ExternalAdapter`. Import can reject empty shapes if their row-major strides overflow. |
-| Optional Candle | `adapter::export_hidden_buffer` / `import_hidden_buffer` copy the same profile. The existing `HiddenState` functions still work. `CandleExecutor` implements `AnnExecutor`, but not `ExternalAdapterMarker`. Candle can reject empty shapes whose native size arithmetic overflows. |
+| CPU reference | `ReferenceExecutor::export_hidden` / `import_hidden` copy through `HiddenStateBuffer`, including through `ExternalAdapter`. Import can reject zero-extent shapes if their row-major strides overflow. |
+| Optional Candle | `adapter::export_hidden_buffer` / `import_hidden_buffer` copy the same profile. The existing `HiddenState` functions still work. `CandleExecutor` implements `AnnExecutor`, but not `ExternalAdapterMarker`. Candle can reject zero-extent shapes whose native size arithmetic overflows. |
 | Optional Burn | Policy-only `BurnAdapter` advertises no hidden-state transfer and rejects import/export. No Burn dependency or native tensor is required. |
 | Hybrid-fusion boundary | Map the copied shape/dtype/payload placement/layout to the caller's own contract. `NegotiationDocument` reports capabilities separately from payload metadata; backend selection, stage placement, and ANN↔SNN conversion belong downstream. |
 
