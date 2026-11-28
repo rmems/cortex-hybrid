@@ -139,6 +139,39 @@ fn reference_and_candle_exchange_stage_outputs_through_the_cpu_buffer() {
 
 #[test]
 #[cfg(feature = "candle")]
+fn reference_and_candle_round_trip_scalar_and_zero_extents() {
+    use cortex_hybrid::adapter::{export_hidden_buffer, import_hidden_buffer};
+
+    let cases: [(&[usize], &[f32]); 4] = [
+        (&[], &[-0.0]),
+        (&[0, 3, 2], &[]),
+        (&[2, 0, 3], &[]),
+        (&[2, 3, 0], &[]),
+    ];
+    for (shape, values) in cases {
+        let round_trip = || -> cortex_hybrid::Result<Tensor> {
+            let reference = Tensor::try_from_vec(values.to_vec(), shape)?;
+            let input = ReferenceExecutor::export_hidden(&reference)?;
+            let candle = import_hidden_buffer(&input)?;
+            let output = export_hidden_buffer(&candle)?;
+            assert_eq!(output.cpu_f32_meta()?, input.cpu_f32_meta()?, "{shape:?}");
+            ReferenceExecutor::import_hidden(&output)
+        };
+        let restored = round_trip().unwrap_or_else(|err| panic!("shape {shape:?}: {err:?}"));
+        assert_eq!(restored.shape(), shape);
+        assert!(
+            restored
+                .data()
+                .iter()
+                .map(|x| x.to_bits())
+                .eq(values.iter().map(|x| x.to_bits())),
+            "shape {shape:?}: value bits or element count changed"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "candle")]
 fn candle_bridge_rejects_nonportable_or_native_overflowing_shapes() {
     use cortex_hybrid::adapter::import_hidden_buffer;
 
